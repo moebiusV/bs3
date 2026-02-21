@@ -1,0 +1,292 @@
+.TH BROWSE-SQLITE3 1 "February 2026" "browse-sqlite3 8" "User Commands"
+.SH NAME
+browse-sqlite3 \- interactive terminal browser for SQLite databases
+.SH SYNOPSIS
+.B browse-sqlite3
+.I database.db
+.SH DESCRIPTION
+.B browse-sqlite3
+is a full-screen terminal application for browsing and editing SQLite
+databases. It provides three navigable views \(em a table list, a row
+browser, and a per-field editor \(em with vi-style keyboard navigation,
+readline-style inline editing, a Turbo Pascal\-inspired color scheme
+using exact CGA palette values, and a context-sensitive help overlay.
+.PP
+Features include:
+.IP \(bu 2
+Vi-style navigation (hjkl, JK for paging, Tab to advance)
+.IP \(bu 2
+Readline-style inline field editor (^A/^E/^B/^F/^W/^K/^U/^T/^D/^G)
+.IP \(bu 2
+Unicode box-drawing characters with ASCII fallback
+.IP \(bu 2
+Turbo Pascal IDE colors via exact CGA RGB values when the terminal supports
+.BR curses.can_change_color ()
+.IP \(bu 2
+Safety mode requiring confirmation before destructive actions
+.IP \(bu 2
+External editor and pager integration via
+.B $EDITOR
+and
+.B $PAGER
+.IP \(bu 2
+East Asian wide-character display support
+.IP \(bu 2
+Smooth scrolling with batched key-repeat processing
+.SH VIEWS
+The interface has three views, navigated in a hierarchy:
+.PP
+.B "Table List"
+\(-> (l/Right/Enter)
+.B "Row Browser"
+\(-> (l/Right/Enter)
+.B "Field Editor"
+.PP
+Press
+.B h
+or
+.B Left
+to go back one level. Press
+.B q
+or
+.B Esc
+to quit from any view.
+.SS Table List
+Displays all tables in the database with their column names.
+.TP
+.BR j / Down
+Move selection down
+.TP
+.BR k / Up
+Move selection up
+.TP
+.BR J / PgDn
+Page down
+.TP
+.BR K / PgUp
+Page up
+.TP
+.B Tab
+Next table
+.TP
+.BR l " / " Right " / " Enter
+Open selected table in the row browser
+.TP
+.BR d " / " Del
+Drop selected table (respects safety mode)
+.SS Row Browser
+Displays all rows of the selected table in a columnar format.
+.TP
+.BR j / Down
+Move selection down
+.TP
+.BR k / Up
+Move selection up
+.TP
+.BR J / PgDn
+Page down
+.TP
+.BR K / PgUp
+Page up
+.TP
+.B Tab
+Next row
+.TP
+.BR l " / " Right " / " Enter
+Edit selected row in the field editor
+.TP
+.BR h " / " Left
+Go back to table list
+.TP
+.BR d " / " Del
+Delete selected row (respects safety mode)
+.TP
+.B Shift+Left
+Scroll display left
+.TP
+.B Shift+Right
+Scroll display right
+.SS Field Editor
+Displays each column of the selected row as a labeled field.
+Fields whose values are too long for the screen are shown truncated
+with a
+.B [LONG]
+indicator.
+.TP
+.BR j / Down
+Move to next field
+.TP
+.BR k / Up
+Move to previous field
+.TP
+.BR J / PgDn
+Page down through fields
+.TP
+.BR K / PgUp
+Page up through fields
+.TP
+.B Tab
+Next field
+.TP
+.BR Enter " / " v
+View field contents in pager
+.TP
+.BR l " / " Right
+View in pager (only when field is truncated)
+.TP
+.B e
+Edit field with the inline editor
+.TP
+.B E
+Edit field in external editor ($EDITOR)
+.TP
+.BR h " / " Left
+Go back to row browser (prompts if unsaved changes)
+.TP
+.BR d " / " Del
+Set field to NULL (respects safety mode)
+.TP
+.B s
+Save all changes to database
+.SH INLINE EDITOR
+When editing a field with
+.BR e ,
+a readline-compatible inline editor appears on the selected field's
+line. If the value contains newlines or exceeds the available width,
+the external editor is launched instead.
+.SS Cursor Movement
+.TP
+.BR Left " / " ^B
+Move cursor left
+.TP
+.BR Right " / " ^F
+Move cursor right
+.TP
+.B ^A
+Jump to beginning of line
+.TP
+.B ^E
+Jump to end of line
+.SS Editing
+.TP
+.B Backspace
+Delete character before cursor
+.TP
+.BR Del " / " ^D
+Delete character at cursor
+.TP
+.B ^W
+Delete word backward
+.TP
+.B ^K
+Kill to end of line
+.TP
+.B ^U
+Kill to beginning of line
+.TP
+.B ^T
+Transpose characters at cursor
+.TP
+.B ^L
+Redraw screen
+.SS Finishing
+.TP
+.B Enter
+Save changes and stop editing
+.TP
+.B Tab
+Save changes and advance to next field
+.TP
+.BR Esc " / " ^G
+Abort edit, discarding changes to this field
+.TP
+.B ^C
+Quit program immediately
+.SH GLOBAL KEYS
+These keys work in all views (except during inline editing):
+.TP
+.BR q " / " Esc
+Quit program without saving
+.TP
+.B ^C
+Quit program without saving
+.TP
+.B F1
+Toggle context-sensitive help overlay
+.TP
+.B :
+Enter command mode
+.SH COMMAND MODE
+Press
+.B :
+to enter command mode (vi-style). Available commands:
+.TP
+.B :safe
+Enable safety mode (default). Destructive actions (dropping tables,
+deleting rows, setting fields to NULL) require a y/n confirmation
+prompt before proceeding.
+.TP
+.B :unsafe
+Disable safety mode. Destructive actions take effect immediately
+without confirmation.
+.SH ENVIRONMENT
+.TP
+.B EDITOR
+External editor for field editing (default:
+.BR vi ).
+When the editor name contains "vi", the editor is opened with the
+cursor at the end of the file in insert mode.
+.TP
+.B PAGER
+Pager for viewing field contents (default:
+.BR less ", falling back to"
+.BR more ).
+.SH COLORS
+.B browse-sqlite3
+uses a color scheme inspired by the Turbo Pascal IDE. On terminals
+that support
+.BR curses.can_change_color ()
+(such as those implementing the kitty graphics protocol), exact CGA
+palette RGB values are programmed into color indices 16\-22 to
+faithfully reproduce the original appearance:
+.PP
+.RS
+.nf
+Black    #000000    Blue   #0000AA
+Green    #00AA00    Cyan   #00AAAA
+Red      #AA0000    Yellow #FFFF55
+White    #FFFFFF
+.fi
+.RE
+.PP
+On terminals that do not support color redefinition, the standard
+curses color constants are used as a fallback; the actual appearance
+will depend on the terminal's theme.
+.SH UNICODE
+Box-drawing characters (\(lq\[u250C]\[u2500]\[u2510]\[u2502]\[u2514]\[u2518]\(rq) are used
+for the help overlay when the locale encoding supports them;
+otherwise ASCII
+.RB ( +\-| )
+is used. Similarly, the horizontal rule under the title bar uses
+\[u2500] or
+.BR \- .
+.PP
+East Asian wide characters are handled correctly in both display
+and inline editing, with proper double-width accounting.
+.SH NOTES
+The program opens the database file read-write. Changes made via the
+field editor's
+.B s
+(save) command, row deletion, and table drops are committed immediately
+to the database.
+.PP
+The
+.B rowid
+pseudo-column is used internally for updates and deletes. Tables
+without a rowid (e.g., WITHOUT ROWID tables) may not work correctly.
+.SH AUTHORS
+Written with assistance from Claude (Anthropic).
+.SH SEE ALSO
+.BR sqlite3 (1),
+.BR less (1),
+.BR vi (1)
