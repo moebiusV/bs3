@@ -1,0 +1,4 @@
+__pycache__/
+Makefile
+venv/
+browse-sqlite3-*.tar.gz
