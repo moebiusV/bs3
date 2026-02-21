@@ -1,0 +1,102 @@
+#!/bin/sh
+# configure script for browse-sqlite3
+# Hand-written POSIX shell — no autoconf needed.
+
+set -e
+
+VERSION=1.0
+
+# Defaults
+prefix=/usr/local
+bindir=
+mandir=
+datarootdir=
+python=
+
+# Parse arguments
+for arg; do
+  case "$arg" in
+    --prefix=*)     prefix="${arg#--prefix=}" ;;
+    --bindir=*)     bindir="${arg#--bindir=}" ;;
+    --mandir=*)     mandir="${arg#--mandir=}" ;;
+    --datarootdir=*) datarootdir="${arg#--datarootdir=}" ;;
+    --with-python=*) python="${arg#--with-python=}" ;;
+    --help|-h)
+      cat <<EOF
+Usage: ./configure [OPTIONS]
+
+Options:
+  --prefix=DIR          installation prefix [/usr/local]
+  --bindir=DIR          user executables [PREFIX/bin]
+  --datarootdir=DIR     read-only arch-independent data root [PREFIX/share]
+  --mandir=DIR          man documentation [DATAROOTDIR/man]
+  --with-python=PATH    path to python3 interpreter
+
+Environment variables:
+  PYTHON                path to python3 interpreter
+EOF
+      exit 0
+      ;;
+    *)
+      echo "warning: unrecognized option: $arg" >&2
+      ;;
+  esac
+done
+
+# Derive defaults
+: "${datarootdir:=${prefix}/share}"
+: "${bindir:=${prefix}/bin}"
+: "${mandir:=${datarootdir}/man}"
+
+# Find python3
+if [ -z "$python" ]; then
+  if [ -n "$PYTHON" ]; then
+    python="$PYTHON"
+  else
+    python=$(command -v python3 2>/dev/null || true)
+  fi
+fi
+
+if [ -z "$python" ]; then
+  echo "error: python3 not found. Use --with-python=PATH or set \$PYTHON." >&2
+  exit 1
+fi
+
+if ! command -v "$python" >/dev/null 2>&1; then
+  echo "error: $python not found or not executable." >&2
+  exit 1
+fi
+
+# Check python3 modules
+echo "checking for python3... $python"
+
+if ! "$python" -c "import sqlite3" 2>/dev/null; then
+  echo "error: python3 sqlite3 module not found." >&2
+  exit 1
+fi
+echo "checking for sqlite3 module... yes"
+
+if ! "$python" -c "import curses" 2>/dev/null; then
+  echo "error: python3 curses module not found." >&2
+  exit 1
+fi
+echo "checking for curses module... yes"
+
+# Generate Makefile from Makefile.in
+sed \
+  -e "s|@PREFIX@|${prefix}|g" \
+  -e "s|@BINDIR@|${bindir}|g" \
+  -e "s|@MANDIR@|${mandir}|g" \
+  -e "s|@PYTHON@|${python}|g" \
+  -e "s|@VERSION@|${VERSION}|g" \
+  Makefile.in > Makefile
+
+echo ""
+echo "browse-sqlite3 $VERSION configured."
+echo ""
+echo "  prefix:    $prefix"
+echo "  bindir:    $bindir"
+echo "  mandir:    $mandir"
+echo "  python:    $python"
+echo ""
+echo "Run 'make' and 'make install' to install."

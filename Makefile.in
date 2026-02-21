@@ -1,0 +1,39 @@
+PREFIX  = @PREFIX@
+BINDIR  = @BINDIR@
+MANDIR  = @MANDIR@
+PYTHON  = @PYTHON@
+VERSION = @VERSION@
+
+PROG    = browse-sqlite3
+MANPAGE = browse-sqlite3.1
+
+.PHONY: all install uninstall clean distclean dist check
+
+all:
+	@echo "Nothing to compile — $(PROG) is a Python script."
+
+install:
+	install -d $(DESTDIR)$(BINDIR)
+	install -m 755 $(PROG) $(DESTDIR)$(BINDIR)/$(PROG)
+	install -d $(DESTDIR)$(MANDIR)/man1
+	install -m 644 $(MANPAGE) $(DESTDIR)$(MANDIR)/man1/$(MANPAGE)
+
+uninstall:
+	rm -f $(DESTDIR)$(BINDIR)/$(PROG)
+	rm -f $(DESTDIR)$(MANDIR)/man1/$(MANPAGE)
+
+clean:
+	rm -f Makefile
+
+distclean: clean
+
+dist:
+	mkdir -p $(PROG)-$(VERSION)
+	cp $(PROG) $(MANPAGE) configure Makefile.in $(PROG)-$(VERSION)/
+	tar czf $(PROG)-$(VERSION).tar.gz $(PROG)-$(VERSION)
+	rm -rf $(PROG)-$(VERSION)
+	@echo "Created $(PROG)-$(VERSION).tar.gz"
+
+check:
+	$(PYTHON) -c "import py_compile; py_compile.compile('$(PROG)', doraise=True)"
+	@echo "Syntax check passed."

@@ -1,4 +1,4 @@
-.TH BROWSE-SQLITE3 1 "February 2026" "browse-sqlite3 8" "User Commands"
+.TH BROWSE-SQLITE3 1 "February 2026" "browse-sqlite3 1.0" "User Commands"
 .SH NAME
 browse-sqlite3 \- interactive terminal browser for SQLite databases
 .SH SYNOPSIS
@@ -74,6 +74,14 @@ Open selected table in the row browser
 .TP
 .BR d " / " Del
 Drop selected table (respects safety mode)
+.TP
+.B o
+Set table display order (see
+.BR ORDER )
+.TP
+.B f
+Find/filter tables by name (see
+.BR FIND )
 .SS Row Browser
 Displays all rows of the selected table in a columnar format.
 .TP
@@ -106,6 +114,14 @@ Scroll display left
 .TP
 .B Shift+Right
 Scroll display right
+.TP
+.B o
+Sort rows by column(s) (see
+.BR ORDER )
+.TP
+.B f
+Find/filter rows (see
+.BR FIND )
 .SS Field Editor
 Displays each column of the selected row as a labeled field.
 Fields whose values are too long for the screen are shown truncated
@@ -148,6 +164,14 @@ Set field to NULL (respects safety mode)
 .TP
 .B s
 Save all changes to database
+.TP
+.B o
+Set column display order (see
+.BR ORDER )
+.TP
+.B f
+Find/highlight fields (see
+.BR FIND )
 .SH INLINE EDITOR
 When editing a field with
 .BR e ,
@@ -229,6 +253,140 @@ prompt before proceeding.
 .B :unsafe
 Disable safety mode. Destructive actions take effect immediately
 without confirmation.
+.SH ORDER
+Press
+.B o
+in any view to open the order/sort overlay. Its behavior depends on
+the current view:
+.SS Table List: Display Order
+Rearranges the order in which tables appear.
+Select a table with
+.BR j / k ,
+press
+.B Space
+to grab it, move it with
+.BR j / k ,
+then press
+.B Space
+again to drop it. The new order is persisted in the database
+(in the
+.B _browse_config
+table) and restored on next launch.
+.PP
+This is analogous to rearranging entries in a directory listing.
+The concept traces back to the ability of early file managers (such as
+.BR mc (1))
+to present items in a user-chosen sequence rather than the default
+filesystem order.
+.SS Row Browser: Sort by Column
+Toggles multi-column sort on the current table's rows.
+Press
+.B Space
+on a column name to add it to the sort order (or remove it),
+.B a
+for ascending,
+.B d
+for descending. When a column is active, grab it with
+.B Space
+and move with
+.BR j / k
+to change sort priority. The sort specification is persisted
+per-table.
+.PP
+Multi-column sort follows the SQL
+.B "ORDER BY"
+convention: the first column is the primary key, subsequent columns
+break ties. This mirrors
+.BR sort (1)
+with multiple
+.B \-k
+keys and the relational algebra ordering operators from
+Codd's 1970 paper on the relational model.
+.SS Field Editor: Column Order
+Rearranges the display order of columns within a table.
+Grab and move columns exactly as with table ordering.
+The new column order is persisted per-table and affects both
+the row browser and field editor displays.
+.PP
+Press
+.B Esc
+to close the overlay.
+.SH FIND
+Press
+.B f
+in any view to open the find bar at the bottom of the screen.
+Type a search pattern and press
+.BR Enter .
+Press
+.B Esc
+to cancel.
+.SS Table List
+Plain substring match against table names; non-matching tables
+are hidden from the list.
+.SS Row Browser
+The find bar accepts structured search patterns that are translated
+into SQL
+.B WHERE
+clauses:
+.TP
+.I text
+Free-text search. Matches any column containing the text
+(becomes
+.BR "col1 LIKE '%text%' OR col2 LIKE ..." ).
+.TP
+.IB col = val
+Exact match on a named column
+(becomes
+.BR "col = 'val'" ).
+.TP
+.IB col ~ val
+Substring (LIKE) match on a named column
+(becomes
+.BR "col LIKE '%val%'" ).
+.PP
+Multiple terms separated by spaces are ANDed together.
+Column names available for filtering are shown as a hint line
+above the find bar. An empty pattern or
+.B .
+clears the active filter.
+.PP
+This pattern language draws from the Unix tradition of composing
+simple text-matching primitives.
+The free-text search corresponds to
+.BR grep (1)
+across all fields; the
+.IB col = val
+syntax echoes
+.BR awk (1)
+field-matching expressions; and the
+.IB col ~ val
+form mirrors the
+.B ~
+match operator in
+.BR awk .
+The AND composition of space-separated terms follows the convention
+established by
+.BR grep (1)
+pipelines, where multiple filters are chained
+to narrow results.
+.SS Field Editor
+Plain substring match against column names and field values;
+matching fields are highlighted.
+.SS History
+The find bar maintains a per-session history of search strings.
+Press
+.B Up
+or
+.B ^P
+to recall previous searches, and
+.B Down
+or
+.B ^N
+to move forward through history. This follows the readline
+history model used by
+.BR bash (1)
+and
+.BR ftp (1).
 .SH ENVIRONMENT
 .TP
 .B EDITOR
