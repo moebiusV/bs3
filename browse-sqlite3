@@ -8,8 +8,17 @@ import tempfile
 import re
 import json
 import locale
+import time
 import unicodedata
 from typing import List, Tuple, Union
+
+try:
+    from _displaywidth import display_width as _c_display_width
+    from _displaywidth import truncate_to_width as _c_truncate_to_width
+    from _displaywidth import skip_display_cols as _c_skip_display_cols
+    _USE_C_WIDTH = True
+except ImportError:
+    _USE_C_WIDTH = False
 
 
 class SQLiteBrowser:
@@ -77,6 +86,11 @@ class SQLiteBrowser:
 
         # Quit flag for ^C
         self.quit_flag = False
+
+        # Cached formatted row strings (one per data row, without
+        # leading space or horizontal offset applied).  Built once in
+        # load_table_data; _format_data_row reads from here.
+        self._row_strings = []
 
         # Load config then tables (config needed for table ordering)
         self.load_all_config()
@@ -200,6 +214,24 @@ class SQLiteBrowser:
             query_params = list(self.find_params)
         self.cursor.execute(f"SELECT rowid, {col_list} FROM {table_name}{where_clause}{order_clause}", query_params)
         self.current_table_data = self.cursor.fetchall()
+        self._cache_row_strings()
+
+    def _cache_row_strings(self):
+        """Pre-format all row strings (whitespace-cleaned, pipe-joined).
+
+        Stores strings WITHOUT leading space or horizontal offset so that
+        _format_data_row can apply the current offset cheaply.
+        """
+        strings = []
+        for row in self.current_table_data:
+            cleaned = []
+            for val in row[1:]:
+                if val is not None:
+                    cleaned.append(re.sub(r'\s+', ' ', str(val).strip()))
+                else:
+                    cleaned.append("NULL")
+            strings.append(" | ".join(cleaned))
+        self._row_strings = strings
 
     def delete_current_row(self) -> bool:
         """Delete the currently selected row"""
@@ -268,6 +300,12 @@ class SQLiteBrowser:
         many as neutral/ambiguous width (e.g. U+2764 HEAVY BLACK HEART).
         Overcounting is always safer than undercounting (truncation vs overflow).
         """
+        # Fast path: printable ASCII is always width 1.  This avoids
+        # expensive unicodedata lookups for the vast majority of
+        # database content.
+        cp = ord(char)
+        if 0x20 <= cp <= 0x7E:
+            return 1
         cat = unicodedata.category(char)
         if cat in ('Mn', 'Me', 'Cf'):
             if '\ufe00' <= char <= '\ufe0f':
@@ -277,12 +315,16 @@ class SQLiteBrowser:
         if ea in ('W', 'F'):
             return 2
         # Emoji-style symbols: terminals render wide despite neutral ea_width
-        if cat == 'So' and ord(char) >= 0x2600:
+        if cat == 'So' and cp >= 0x2600:
             return 2
         return 1
 
     def get_display_width(self, text: str) -> int:
         """Calculate display width considering East Asian and zero-width characters"""
+        if _USE_C_WIDTH:
+            return _c_display_width(text)
+        if text.isascii():
+            return len(text)
         width = 0
         for char in text:
             width += self._char_width(char)
@@ -290,6 +332,10 @@ class SQLiteBrowser:
 
     def skip_display_cols(self, text: str, cols: int) -> str:
         """Skip *cols* display columns from the start of *text* and return the rest."""
+        if _USE_C_WIDTH:
+            return _c_skip_display_cols(text, cols)
+        if text.isascii():
+            return text[cols:] if cols < len(text) else ''
         w = 0
         for i, char in enumerate(text):
             cw = self._char_width(char)
@@ -308,18 +354,22 @@ class SQLiteBrowser:
 
     def truncate_to_width(self, text: str, max_w: int) -> str:
         """Truncate text to fit within display width"""
+        if _USE_C_WIDTH:
+            return _c_truncate_to_width(text, max_w)
+        if text.isascii():
+            return text[:max_w] if len(text) > max_w else text
         w = 0
-        res = ''
+        parts = []
         for char in text:
             cw = self._char_width(char)
             if cw == 0:
-                res += char  # always include zero-width chars
+                parts.append(char)  # always include zero-width chars
                 continue
             if w + cw > max_w:
                 break
-            res += char
+            parts.append(char)
             w += cw
-        return res
+        return ''.join(parts)
 
     def safe_addstr(self, stdscr, y: int, x: int, text: str, attr=0):
         """Safely add string to screen, handling boundaries and wide characters.
@@ -338,23 +388,21 @@ class SQLiteBrowser:
     def safe_addstr_full_width(self, stdscr, y: int, x: int, text: str, attr=0):
         """Add string padded to fill the full line width.
 
-        Uses ncurses' own cursor tracking (getyx) for padding rather than
-        our width calculation.  This prevents overflow when our display-width
-        estimate disagrees with what ncurses/terminal actually renders."""
+        Truncates text to fit and pads with spaces to the end of the
+        line in a single addstr call to minimize curses overhead."""
         height, width = stdscr.getmaxyx()
         if y >= height or y < 0 or x >= width or x < 0:
             return
         max_w = width - x
         truncated = self.truncate_to_width(text, max_w)
+        dw = self.get_display_width(truncated)
+        pad = max_w - dw
+        if pad > 0:
+            truncated = truncated + ' ' * pad
+        # Trim to max_w chars as a safety net (for pure-ASCII paths
+        # where display_width == len, this is exact)
         try:
             stdscr.addstr(y, x, truncated, attr)
-        except curses.error:
-            pass
-        # Pad from where ncurses actually placed the cursor to end of line
-        try:
-            cy, cx = stdscr.getyx()
-            if cy == y and cx < width:
-                stdscr.addstr(y, cx, ' ' * (width - cx), attr)
         except curses.error:
             pass
 
@@ -616,8 +664,41 @@ class SQLiteBrowser:
         if not self.command_mode and not self.prompt_mode and not self.find_mode:
             self.draw_status_bar(stdscr, height, width)
 
+    def _draw_single_table_row(self, stdscr, table_idx: int, height: int, width: int):
+        """Redraw a single table list row at its screen position."""
+        filtered_tables = self.get_filtered_tables()
+        start_idx = self.table_scroll_offset
+        line_num = 2 + (table_idx - start_idx)
+        if line_num < 2 or line_num >= height - 1 or table_idx >= len(filtered_tables):
+            return
+        table_name, columns = filtered_tables[table_idx]
+        columns_str = ", ".join(columns)
+        display_line = f" {table_name}: {columns_str}"
+        if table_idx == self.selected_table_idx:
+            attr = curses.color_pair(self.C_SELECTED)
+        else:
+            attr = curses.color_pair(self.C_NORMAL)
+        self.safe_addstr_full_width(stdscr, line_num, 0, display_line, attr)
+
+    def _format_data_row(self, row_idx: int) -> str:
+        """Format a single data row for display using cached strings."""
+        return " " + self.skip_display_cols(self._row_strings[row_idx], self.row_horizontal_offset)
+
+    def _draw_single_row(self, stdscr, row_idx: int, height: int, width: int):
+        """Redraw a single data row at its screen position."""
+        start_idx = self.row_scroll_offset
+        line_num = 2 + (row_idx - start_idx)
+        if line_num < 2 or line_num >= height - 1:
+            return
+        display = self._format_data_row(row_idx)
+        if row_idx == self.selected_row_idx:
+            attr = curses.color_pair(self.C_SELECTED)
+        else:
+            attr = curses.color_pair(self.C_NORMAL)
+        self.safe_addstr_full_width(stdscr, line_num, 0, display, attr)
+
     def draw_rows_view(self, stdscr, height: int, width: int):
-        """Draw the table rows view content"""
+        """Draw the table rows view content (full redraw)."""
         if self.find_filter and self.find_where:
             title = f" Table: {self.current_table_name} ({len(self.current_table_data)}/{self.unfilt_row_count} rows) [Find: {self.find_filter}] "
         else:
@@ -632,21 +713,7 @@ class SQLiteBrowser:
         end_idx = min(start_idx + visible_height, len(self.current_table_data))
 
         for i in range(start_idx, end_idx):
-            row = self.current_table_data[i]
-            line_num = 2 + (i - start_idx)
-            cleaned_values = []
-            for val in row[1:]:
-                if val is not None:
-                    val_str = re.sub(r'\s+', ' ', str(val).strip())
-                else:
-                    val_str = "NULL"
-                cleaned_values.append(val_str)
-            row_str = " | ".join(cleaned_values)
-            display = self.skip_display_cols(row_str, self.row_horizontal_offset)
-            if i == self.selected_row_idx:
-                self.safe_addstr_full_width(stdscr, line_num, 0, f" {display}", curses.color_pair(self.C_SELECTED))
-            else:
-                self.safe_addstr_full_width(stdscr, line_num, 0, f" {display}", curses.color_pair(self.C_NORMAL))
+            self._draw_single_row(stdscr, i, height, width)
         # Clear any remaining content lines (including gap line before status bar)
         for line_num in range(2 + end_idx - start_idx, height - 1):
             self.safe_addstr_full_width(stdscr, line_num, 0, "", curses.color_pair(self.C_NORMAL))
@@ -791,59 +858,167 @@ class SQLiteBrowser:
         curses.curs_set(0)
         stdscr.erase()
 
+        FRAME_SEC = 1.0 / 30
+        up_keys = {curses.KEY_UP, ord('k')}
+        down_keys = {curses.KEY_DOWN, ord('j')}
+        pgup_keys = {curses.KEY_PPAGE, ord('K')}
+        pgdn_keys = {curses.KEY_NPAGE, ord('J')}
+        left_keys = {curses.KEY_SLEFT}
+        right_keys = {curses.KEY_SRIGHT}
+        nav_pairs = {
+            'vert':  (up_keys, down_keys),
+            'page':  (pgup_keys, pgdn_keys),
+            'horiz': (left_keys, right_keys),
+        }
+        all_nav_keys = up_keys | down_keys | pgup_keys | pgdn_keys | left_keys | right_keys
+
+        _full_redraw = True
+        _prev_view = None
+        _prev_row_idx = -1
+        _prev_scroll = -1
+        _prev_field_idx = -1
+        _prev_field_scroll = -1
+        _prev_table_idx = -1
+        _prev_table_scroll = -1
+
         while True:
-            stdscr.erase()
+            frame_start = time.monotonic()
             height, width = stdscr.getmaxyx()
 
-            if self.current_view == 'tables':
-                self.draw_tables_view(stdscr, height, width)
-            elif self.current_view == 'rows':
-                self.draw_rows_view(stdscr, height, width)
-            elif self.current_view == 'edit':
-                self.draw_edit_view(stdscr, height, width)
+            # --- Partial vs full redraw decision ---
+            did_partial = False
+            if (not _full_redraw
+                    and self.current_view == _prev_view
+                    and not self.find_mode and not self.command_mode
+                    and not self.prompt_mode and not self.help_mode
+                    and not self.sort_mode):
+                if (self.current_view == 'rows'
+                        and self.row_scroll_offset == _prev_scroll
+                        and self.row_horizontal_offset == getattr(self, '_prev_horiz', self.row_horizontal_offset)
+                        and self.selected_row_idx != _prev_row_idx):
+                    self._draw_single_row(stdscr, _prev_row_idx, height, width)
+                    self._draw_single_row(stdscr, self.selected_row_idx, height, width)
+                    self.draw_status_bar(stdscr, height, width)
+                    did_partial = True
+                elif (self.current_view == 'tables'
+                        and self.table_scroll_offset == _prev_table_scroll
+                        and self.selected_table_idx != _prev_table_idx):
+                    self._draw_single_table_row(stdscr, _prev_table_idx, height, width)
+                    self._draw_single_table_row(stdscr, self.selected_table_idx, height, width)
+                    self.draw_status_bar(stdscr, height, width)
+                    did_partial = True
 
-            if self.find_mode:
-                self.draw_find_bar(stdscr, height, width)
-                curses.curs_set(1)
-            elif self.command_mode:
-                self.draw_command_bar(stdscr, height, width)
-                curses.curs_set(1)
-            elif self.prompt_mode:
-                self.draw_prompt_bar(stdscr, height, width)
-                curses.curs_set(0)
-            else:
-                curses.curs_set(0)
+            if not did_partial:
+                stdscr.erase()
 
-            if self.help_mode:
-                self.draw_help_overlay(stdscr, height, width)
+                if self.current_view == 'tables':
+                    self.draw_tables_view(stdscr, height, width)
+                elif self.current_view == 'rows':
+                    self.draw_rows_view(stdscr, height, width)
+                elif self.current_view == 'edit':
+                    self.draw_edit_view(stdscr, height, width)
 
-            if self.sort_mode:
-                self.draw_sort_overlay(stdscr, height, width)
+                if self.find_mode:
+                    self.draw_find_bar(stdscr, height, width)
+                    curses.curs_set(1)
+                elif self.command_mode:
+                    self.draw_command_bar(stdscr, height, width)
+                    curses.curs_set(1)
+                elif self.prompt_mode:
+                    self.draw_prompt_bar(stdscr, height, width)
+                    curses.curs_set(0)
+                else:
+                    curses.curs_set(0)
 
-            stdscr.touchwin()
+                if self.help_mode:
+                    self.draw_help_overlay(stdscr, height, width)
+
+                if self.sort_mode:
+                    self.draw_sort_overlay(stdscr, height, width)
+
+            if not did_partial:
+                stdscr.touchwin()
             stdscr.refresh()
+
             try:
                 key = stdscr.getch()
             except KeyboardInterrupt:
                 key = 3  # Treat as ^C
 
-            # Drain buffered repeats of the same key, counting them
-            # so holding an arrow processes all repeats in one redraw
+            # --- frame-paced input batching ---
+            # Navigation keys on the same axis (e.g. up/down) are
+            # collected into a net displacement.  To keep scrolling
+            # smooth we pace frames at 30 fps: after the first nav
+            # key arrives we sleep only the time remaining in the
+            # current frame (subtracting render + getch time already
+            # spent) then drain whatever accumulated.
+
+            # Classify the first key into a navigation axis
+            axis = None
+            for ax, (neg, pos) in nav_pairs.items():
+                if key in neg or key in pos:
+                    axis = ax
+                    break
+
             repeat_count = 1
-            stdscr.nodelay(True)
-            while True:
-                try:
-                    next_key = stdscr.getch()
-                except KeyboardInterrupt:
-                    next_key = 3
-                if next_key == -1:
-                    break
-                if next_key == key:
-                    repeat_count += 1
+            drained = 0
+            if axis is not None:
+                neg_keys, pos_keys = nav_pairs[axis]
+                all_axis_keys = neg_keys | pos_keys
+                direction = 1 if key in pos_keys else -1
+                net = direction  # first key already counted
+
+                # Sleep only the remaining frame budget so that
+                # render_time + sleep = FRAME_SEC.  If rendering
+                # already exceeded the budget, skip the sleep.
+                elapsed = time.monotonic() - frame_start
+                remaining = FRAME_SEC - elapsed
+                if remaining > 0:
+                    time.sleep(remaining)
+
+                stdscr.nodelay(True)
+                while True:
+                    try:
+                        next_key = stdscr.getch()
+                    except KeyboardInterrupt:
+                        next_key = 3
+                    if next_key == -1:
+                        break
+                    drained += 1
+                    if next_key in all_axis_keys:
+                        net += 1 if next_key in pos_keys else -1
+                    else:
+                        curses.ungetch(next_key)
+                        break
+                stdscr.nodelay(False)
+
+                # Convert net displacement to a canonical key + count
+                if net > 0:
+                    key = min(pos_keys)     # canonical positive key
+                    repeat_count = net
+                elif net < 0:
+                    key = min(neg_keys)     # canonical negative key
+                    repeat_count = -net
                 else:
-                    curses.ungetch(next_key)
-                    break
-            stdscr.nodelay(False)
+                    # Net zero — movements cancelled out; skip dispatch
+                    repeat_count = 0
+            else:
+                # Non-navigation key: drain same-key repeats instantly
+                stdscr.nodelay(True)
+                while True:
+                    try:
+                        next_key = stdscr.getch()
+                    except KeyboardInterrupt:
+                        next_key = 3
+                    if next_key == -1:
+                        break
+                    drained += 1
+                    if next_key == key:
+                        repeat_count += 1
+                    else:
+                        curses.ungetch(next_key)
+                        break
+                stdscr.nodelay(False)
 
             self.message = None  # Reset message after display
 
@@ -979,6 +1154,16 @@ class SQLiteBrowser:
             }
             count = repeat_count if key in nav_keys else 1
 
+            # Save state before dispatch so we can detect what changed
+            _prev_view = self.current_view
+            _prev_row_idx = self.selected_row_idx
+            _prev_scroll = self.row_scroll_offset
+            self._prev_horiz = self.row_horizontal_offset
+            _prev_table_idx = self.selected_table_idx
+            _prev_table_scroll = self.table_scroll_offset
+            _prev_field_idx = self.selected_field_idx
+            _prev_field_scroll = self.field_scroll_offset
+
             # View-specific input
             for _ in range(count):
                 if self.current_view == 'tables':
@@ -987,6 +1172,12 @@ class SQLiteBrowser:
                     self.handle_rows_input(key, height)
                 elif self.current_view == 'edit':
                     self.handle_edit_input(stdscr, key, height, width)
+
+            # Decide if next frame needs a full redraw or just partial
+            _full_redraw = (
+                self.current_view != _prev_view
+                or self.message is not None
+            )
 
             if self.quit_flag:
                 break
