@@ -3,9 +3,6 @@
 
 EAPI=8
 
-PYTHON_COMPAT=( python3_{10..13} )
-inherit python-single-r1
-
 DESCRIPTION="Interactive terminal browser for SQLite databases"
 HOMEPAGE="https://github.com/moebiusV/bs3"
 SRC_URI="https://github.com/moebiusV/bs3/releases/download/v${PV}/${P}.tar.gz"
@@ -13,13 +10,12 @@ SRC_URI="https://github.com/moebiusV/bs3/releases/download/v${PV}/${P}.tar.gz"
 LICENSE="BSD-2"
 SLOT="0"
 KEYWORDS="~amd64 ~x86"
-REQUIRED_USE="${PYTHON_REQUIRED_USE}"
 
-RDEPEND="${PYTHON_DEPS}"
-BDEPEND="${PYTHON_DEPS}"
+BDEPEND="virtual/pkgconfig"
+RDEPEND="sys-libs/ncurses:="
 
 src_configure() {
-	./configure --prefix=/usr --with-python="${PYTHON}"
+	./configure --prefix=/usr
 }
 
 src_compile() {

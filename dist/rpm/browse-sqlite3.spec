@@ -6,9 +6,9 @@ License:        BSD-2-Clause
 URL:            https://github.com/moebiusV/bs3
 Source0:        %{name}-%{version}.tar.gz
 
-BuildRequires:  python3-devel
 BuildRequires:  gcc
-Requires:       python3
+BuildRequires:  ncurses-devel
+BuildRequires:  pkgconfig
 
 %description
 browse-sqlite3 is a full-screen TUI browser for SQLite databases with

@@ -6,8 +6,8 @@ pkgdesc="Interactive terminal browser for SQLite databases"
 url="https://github.com/moebiusV/bs3"
 arch="x86_64"
 license="BSD-2-Clause"
-depends="python3"
-makedepends="gcc python3-dev"
+depends="ncurses-libs"
+makedepends="gcc ncurses-dev"
 source="$pkgname-$pkgver.tar.gz"
 
 build() {

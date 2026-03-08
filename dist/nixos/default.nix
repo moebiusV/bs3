@@ -1,4 +1,4 @@
-{ lib, stdenv, python3, fetchFromGitHub }:
+{ lib, stdenv, ncurses, pkg-config, fetchFromGitHub }:
 
 stdenv.mkDerivation rec {
   pname = "browse-sqlite3";
@@ -11,11 +11,11 @@ stdenv.mkDerivation rec {
     sha256 = lib.fakeSha256;
   };
 
-  buildInputs = [ python3 ];
-  nativeBuildInputs = [ python3 ];
+  buildInputs = [ ncurses ];
+  nativeBuildInputs = [ pkg-config ];
 
   configurePhase = ''
-    ./configure --prefix=$out --with-python=${python3}/bin/python3
+    ./configure --prefix=$out
   '';
 
   buildPhase = "make";
