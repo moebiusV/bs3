@@ -4,6 +4,7 @@ browse-sqlite3 \- interactive terminal browser for SQLite databases
 .SH SYNOPSIS
 .B browse-sqlite3
 .I database.db
+.RI [ table ]
 .SH DESCRIPTION
 .B browse-sqlite3
 is a full-screen terminal application for browsing and editing SQLite
@@ -11,6 +12,11 @@ databases. It provides three navigable views \(em a table list, a row
 browser, and a per-field editor \(em with vi-style keyboard navigation,
 readline-style inline editing, a Turbo Pascal\-inspired color scheme
 using exact CGA palette values, and a context-sensitive help overlay.
+.PP
+If
+.I table
+is given, the browser opens directly to the row view for that table
+(case-insensitive match).
 .PP
 Features include:
 .IP \(bu 2

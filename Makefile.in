@@ -5,25 +5,34 @@ PYTHON  = @PYTHON@
 VERSION = @VERSION@
 
 PROG    = browse-sqlite3
+ALIAS   = bs3
 MANPAGE = browse-sqlite3.1
+EXT_SUFFIX = $(shell $(PYTHON) -c "import sysconfig; print(sysconfig.get_config_var('EXT_SUFFIX'))")
+EXT_MOD = _displaywidth$(EXT_SUFFIX)
 
 .PHONY: all install uninstall clean distclean dist check
 
-all:
-	@echo "Nothing to compile — $(PROG) is a Python script."
+all: $(EXT_MOD)
+
+$(EXT_MOD): _displaywidth.c
+	$(CC) -shared -fPIC -O2 $$($(PYTHON) -c "import sysconfig; print(sysconfig.get_config_var('CFLAGS') or '')") $$($(PYTHON)-config --includes) -o $@ $<
 
 install:
 	install -d $(DESTDIR)$(BINDIR)
 	install -m 755 $(PROG) $(DESTDIR)$(BINDIR)/$(PROG)
+	ln -sf $(PROG) $(DESTDIR)$(BINDIR)/$(ALIAS)
 	install -d $(DESTDIR)$(MANDIR)/man1
 	install -m 644 $(MANPAGE) $(DESTDIR)$(MANDIR)/man1/$(MANPAGE)
+	ln -sf $(MANPAGE) $(DESTDIR)$(MANDIR)/man1/$(ALIAS).1
 
 uninstall:
 	rm -f $(DESTDIR)$(BINDIR)/$(PROG)
+	rm -f $(DESTDIR)$(BINDIR)/$(ALIAS)
 	rm -f $(DESTDIR)$(MANDIR)/man1/$(MANPAGE)
+	rm -f $(DESTDIR)$(MANDIR)/man1/$(ALIAS).1
 
 clean:
-	rm -f Makefile
+	rm -f $(EXT_MOD) Makefile
 
 distclean: clean
 

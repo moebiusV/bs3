@@ -84,6 +84,13 @@ class SQLiteBrowser:
         self.find_history_idx = -1    # -1 = new entry; 0..n = browsing history
         self.find_saved_input = ""    # Stash current input when browsing history
 
+        # Find dialog state (per-column filter overlay)
+        self.find_dialog = False           # True when dialog is open
+        self.find_dialog_inputs = []       # list of strings, one per column
+        self.find_dialog_focus = 0         # index of focused text field
+        self.find_dialog_scroll = 0        # scroll offset for many columns
+        self.find_dialog_and_flags = []    # per-field bool: True = AND (required)
+
         # Quit flag for ^C
         self.quit_flag = False
 
@@ -433,7 +440,7 @@ class SQLiteBrowser:
                 ("d / Del", "Drop selected table"),
                 ("", "  SAFE: prompts | UNSAFE: immediate"),
                 ("o", "Set table display order"),
-                ("f", "Find/filter tables"),
+                ("/", "Search/filter tables"),
             ]
         elif self.current_view == 'rows':
             specific = [
@@ -450,7 +457,8 @@ class SQLiteBrowser:
                 ("Shift+Left", "Scroll display left"),
                 ("Shift+Right", "Scroll display right"),
                 ("o", "Sort rows by column(s)"),
-                ("f", "Find/filter rows"),
+                ("/", "Search rows (any field)"),
+                ("f", "Find by column (dialog)"),
             ]
         else:  # edit
             specific = [
@@ -469,7 +477,7 @@ class SQLiteBrowser:
                 ("", "  SAFE: prompts | UNSAFE: immediate"),
                 ("s", "Save all changes to database"),
                 ("o", "Set column display order"),
-                ("f", "Find/highlight fields"),
+                ("/", "Search/highlight fields"),
                 ("", ""),
                 ("", "-- Inline Editing (after e) --"),
                 ("Left / ^B", "Move cursor left"),
@@ -592,12 +600,12 @@ class SQLiteBrowser:
         nav = "hjkl/\u2190\u2191\u2193\u2192:Nav"   # ←↑↓→
         pg  = "JK/PgUp PgDn"
         if self.current_view == 'tables':
-            return f" {mode_str} | {nav} | {pg} | Tab:\u2192 | l:Open | d:Drop | o:Order | f:Find | q:Quit | F1:Help "
+            return f" {mode_str} | {nav} | {pg} | Tab:\u2192 | l:Open | d:Drop | o:Order | /:Search | q:Quit | F1:Help "
         elif self.current_view == 'rows':
-            return f" {mode_str} | {nav} | {pg} | Tab:\u2192 | l:Edit | d:Del | h:Back | o:Sort | f:Find | q:Quit | F1:Help "
+            return f" {mode_str} | {nav} | {pg} | Tab:\u2192 | l:Edit | d:Del | h:Back | o:Sort | /:Search | f:Find | q:Quit | F1:Help "
         else:  # edit
             modified = self.has_unsaved_changes()
-            base = f" {mode_str} | {nav} | {pg} | Tab:\u2192 | Enter:View | e:Edit | E:Ext | s:Save | h:Back | o:Order | f:Find | q:Quit | F1:Help "
+            base = f" {mode_str} | {nav} | {pg} | Tab:\u2192 | Enter:View | e:Edit | E:Ext | s:Save | h:Back | o:Order | /:Search | q:Quit | F1:Help "
             if modified:
                 return base.rstrip() + " [UNSAVED!] "
             return base
@@ -891,7 +899,7 @@ class SQLiteBrowser:
                     and self.current_view == _prev_view
                     and not self.find_mode and not self.command_mode
                     and not self.prompt_mode and not self.help_mode
-                    and not self.sort_mode):
+                    and not self.sort_mode and not self.find_dialog):
                 if (self.current_view == 'rows'
                         and self.row_scroll_offset == _prev_scroll
                         and self.row_horizontal_offset == getattr(self, '_prev_horiz', self.row_horizontal_offset)
@@ -935,6 +943,9 @@ class SQLiteBrowser:
 
                 if self.sort_mode:
                     self.draw_sort_overlay(stdscr, height, width)
+
+                if self.find_dialog:
+                    self.draw_find_dialog(stdscr, height, width)
 
             if not did_partial:
                 stdscr.touchwin()
@@ -1046,6 +1057,37 @@ class SQLiteBrowser:
                 self.handle_sort_input(key)
                 if self.quit_flag:
                     break
+                continue
+
+            # Find dialog mode (per-column filter overlay)
+            if self.find_dialog:
+                if key == 27:  # Esc - cancel
+                    self.find_dialog = False
+                elif key == ord('\n') or key == curses.KEY_ENTER:
+                    self.find_dialog = False
+                    self.apply_find_dialog()
+                elif key == 9:  # Tab - next field
+                    self.find_dialog_focus = (self.find_dialog_focus + 1) % len(self.current_columns)
+                elif key == curses.KEY_BTAB:  # Shift+Tab - previous field
+                    self.find_dialog_focus = (self.find_dialog_focus - 1) % len(self.current_columns)
+                elif key == curses.KEY_DOWN:
+                    self.find_dialog_focus = min(self.find_dialog_focus + 1, len(self.current_columns) - 1)
+                elif key == curses.KEY_UP:
+                    self.find_dialog_focus = max(0, self.find_dialog_focus - 1)
+                elif key == curses.KEY_BACKSPACE or key == 127:
+                    idx = self.find_dialog_focus
+                    if self.find_dialog_inputs[idx]:
+                        self.find_dialog_inputs[idx] = self.find_dialog_inputs[idx][:-1]
+                elif 32 <= key <= 126:
+                    self.find_dialog_inputs[self.find_dialog_focus] += chr(key)
+                elif key == 1:  # Ctrl+A - toggle AND/OR for focused field
+                    idx = self.find_dialog_focus
+                    self.find_dialog_and_flags[idx] = not self.find_dialog_and_flags[idx]
+                elif key == 18:  # Ctrl+R - reset all fields
+                    self.find_dialog_inputs = [""] * len(self.current_columns)
+                    self.find_dialog_and_flags = [False] * len(self.current_columns)
+                if key == 3:  # ^C
+                    self.quit_flag = True
                 continue
 
             if self.command_mode:
@@ -1234,7 +1276,7 @@ class SQLiteBrowser:
                     self.prompt_action = self.drop_current_table
         elif key == ord('o'):
             self.open_sort_dialog()
-        elif key == ord('f'):
+        elif key == ord('/'):
             self.enter_find_mode()
 
     def handle_rows_input(self, key: int, height: int):
@@ -1283,8 +1325,10 @@ class SQLiteBrowser:
             self.row_horizontal_offset += 5
         elif key == ord('o'):
             self.open_sort_dialog()
-        elif key == ord('f'):
+        elif key == ord('/'):
             self.enter_find_mode()
+        elif key == ord('f'):
+            self.enter_find_dialog()
 
     def handle_edit_input(self, stdscr, key: int, height: int, width: int):
         """Handle input in edit view"""
@@ -1354,7 +1398,7 @@ class SQLiteBrowser:
                 self.message = "Save or discard changes before reordering columns."
             else:
                 self.open_sort_dialog()
-        elif key == ord('f'):
+        elif key == ord('/'):
             self.enter_find_mode()
 
     # ----------------------------------------------------------------
@@ -1980,19 +2024,243 @@ class SQLiteBrowser:
         cursor_x = min(self.get_display_width(prompt), w - 1)
         stdscr.move(h - 1, cursor_x)
 
+    # ----------------------------------------------------------------
+    # Per-column Find dialog
+    # ----------------------------------------------------------------
+
+    def enter_find_dialog(self):
+        """Open the per-column find dialog (rows view only)"""
+        if self.current_view != 'rows' or not self.current_columns:
+            return
+        self.find_dialog = True
+        self.find_dialog_focus = 0
+        self.find_dialog_scroll = 0
+        self.find_dialog_inputs = [""] * len(self.current_columns)
+        self.find_dialog_and_flags = [False] * len(self.current_columns)
+        # Pre-fill from active filter if there is one
+        if self.find_where and self.find_params:
+            self._prefill_dialog_from_filter()
+
+    def _prefill_dialog_from_filter(self):
+        """Try to reverse-map the active WHERE clause back into per-column values.
+
+        Since we generate the WHERE ourselves, we know the structure:
+        - AND fields appear as top-level '"col" LIKE ?' clauses
+        - OR fields appear inside a parenthesized group '("col" LIKE ? OR ...)'
+        """
+        if not self.find_where:
+            return
+        # Find the parenthesized OR group, if any
+        or_group_start = self.find_where.find('(')
+        or_group_end = self.find_where.rfind(')')
+        for i, col in enumerate(self.current_columns):
+            marker = f'"{col}" LIKE ?'
+            if marker in self.find_where:
+                # Find which parameter corresponds to this column
+                pos = self.find_where.index(marker)
+                before = self.find_where[:pos]
+                param_idx = before.count('LIKE ?')
+                if param_idx < len(self.find_params):
+                    val = self.find_params[param_idx]
+                    if val.startswith('%') and val.endswith('%'):
+                        val = val[1:-1]
+                    self.find_dialog_inputs[i] = val
+                    # Determine AND vs OR: if marker is inside parens, it's OR
+                    if or_group_start >= 0 and pos > or_group_start and pos < or_group_end:
+                        self.find_dialog_and_flags[i] = False
+                    else:
+                        self.find_dialog_and_flags[i] = True
+
+    def apply_find_dialog(self):
+        """Build WHERE clause from filled dialog fields and apply.
+
+        OR fields (default) are grouped: (col1 LIKE ? OR col2 LIKE ? ...).
+        AND fields are required: each becomes a top-level AND clause.
+        """
+        and_clauses = []
+        or_clauses = []
+        params_and = []
+        params_or = []
+        terms = []
+        for i, col in enumerate(self.current_columns):
+            val = self.find_dialog_inputs[i].strip()
+            if val:
+                if self.find_dialog_and_flags[i]:
+                    and_clauses.append(f'"{col}" LIKE ?')
+                    params_and.append(f'%{val}%')
+                    terms.append(f'+{col}~{val}')
+                else:
+                    or_clauses.append(f'"{col}" LIKE ?')
+                    params_or.append(f'%{val}%')
+                    terms.append(f'{col}~{val}')
+
+        all_clauses = list(and_clauses)
+        if or_clauses:
+            all_clauses.append("(" + " OR ".join(or_clauses) + ")")
+
+        if all_clauses:
+            self.find_where = " AND ".join(all_clauses)
+            self.find_params = params_and + params_or
+            self.find_filter = " ".join(terms)
+        else:
+            self.find_where = ""
+            self.find_params = []
+            self.find_filter = ""
+        self.load_table_data(self.current_table_name)
+        self.selected_row_idx = 0
+        self.row_scroll_offset = 0
+
+    def draw_find_dialog(self, stdscr, height, width):
+        """Draw the per-column find dialog as a centered overlay"""
+        cols = self.current_columns
+        n = len(cols)
+
+        # Calculate window dimensions
+        box_w = min(60, width - 4)
+        box_h = min(n + 4, height - 2)  # title + blank + content + blank + bottom
+        start_y = max(0, (height - box_h) // 2)
+        start_x = max(0, (width - box_w) // 2)
+        inner_w = box_w - 4  # border + 1 padding each side
+
+        help_attr = curses.color_pair(self.C_HELP)
+        sel_attr = curses.color_pair(self.C_SELECTED)
+        border_attr = curses.color_pair(self.C_TITLE) | curses.A_BOLD
+
+        # Box drawing characters
+        try:
+            "\u2500".encode(locale.getpreferredencoding())
+            TL, TR, BL, BR, HZ, VT = "\u250c", "\u2510", "\u2514", "\u2518", "\u2500", "\u2502"
+        except (UnicodeEncodeError, LookupError):
+            TL, TR, BL, BR, HZ, VT = "+", "+", "+", "+", "-", "|"
+
+        # Top border with centered title
+        title = " Find by Column "
+        pad_total = box_w - 2 - len(title)
+        pad_left = pad_total // 2
+        pad_right = pad_total - pad_left
+        top_border = TL + HZ * pad_left + title + HZ * pad_right + TR
+        self.safe_addstr(stdscr, start_y, start_x, top_border, border_attr)
+
+        def draw_row(y, content, attr=help_attr):
+            self.safe_addstr(stdscr, y, start_x, VT, border_attr)
+            self.safe_addstr(stdscr, y, start_x + 1, " " + content + " ", attr)
+            self.safe_addstr(stdscr, y, start_x + box_w - 1, VT, border_attr)
+
+        # Blank line after title
+        blank = " " * inner_w
+        draw_row(start_y + 1, blank)
+
+        # Content area
+        content_h = box_h - 4
+
+        # Adjust scroll to keep focus visible
+        if self.find_dialog_focus < self.find_dialog_scroll:
+            self.find_dialog_scroll = self.find_dialog_focus
+        elif self.find_dialog_focus >= self.find_dialog_scroll + content_h:
+            self.find_dialog_scroll = self.find_dialog_focus - content_h + 1
+
+        # Label width = max column name length + 2 (for ": ")
+        max_label = 0
+        for col in cols:
+            cw = self.get_display_width(col)
+            if cw > max_label:
+                max_label = cw
+        label_w = min(max_label + 2, inner_w // 2)  # cap at half the inner width
+        indicator_w = 4  # "OR  " or "AND "
+        input_w = inner_w - label_w - indicator_w
+
+        cursor_y = -1
+        cursor_x = -1
+
+        for i in range(content_h):
+            cy = start_y + 2 + i
+            idx = self.find_dialog_scroll + i
+            if idx < n:
+                col = cols[idx]
+                label = self.truncate_to_width(col, label_w - 2) + ": "
+                label_dw = self.get_display_width(label)
+                label = label + " " * (label_w - label_dw)
+
+                val = self.find_dialog_inputs[idx]
+                val_display = self.truncate_to_width(val, input_w)
+                val_dw = self.get_display_width(val_display)
+                val_padded = val_display + " " * (input_w - val_dw)
+
+                is_and = self.find_dialog_and_flags[idx]
+                indicator = "AND " if is_and else "OR  "
+
+                if idx == self.find_dialog_focus:
+                    # Draw label in help_attr, indicator, input area in sel_attr
+                    self.safe_addstr(stdscr, cy, start_x, VT, border_attr)
+                    self.safe_addstr(stdscr, cy, start_x + 1, " " + label, help_attr)
+                    ind_x = start_x + 2 + label_w
+                    ind_attr = sel_attr | curses.A_BOLD if is_and else help_attr
+                    self.safe_addstr(stdscr, cy, ind_x, indicator, ind_attr)
+                    input_x = ind_x + indicator_w
+                    self.safe_addstr(stdscr, cy, input_x, val_padded, sel_attr)
+                    self.safe_addstr(stdscr, cy, start_x + box_w - 1, VT, border_attr)
+                    # Position cursor at end of text in focused field
+                    cursor_y = cy
+                    cursor_x = min(input_x + val_dw, start_x + box_w - 2)
+                else:
+                    ind_attr = help_attr | curses.A_BOLD if is_and else help_attr
+                    self.safe_addstr(stdscr, cy, start_x, VT, border_attr)
+                    self.safe_addstr(stdscr, cy, start_x + 1, " " + label, help_attr)
+                    ind_x = start_x + 2 + label_w
+                    self.safe_addstr(stdscr, cy, ind_x, indicator, ind_attr)
+                    input_x = ind_x + indicator_w
+                    self.safe_addstr(stdscr, cy, input_x, val_padded, help_attr)
+                    self.safe_addstr(stdscr, cy, start_x + box_w - 1, VT, border_attr)
+            else:
+                draw_row(cy, blank)
+
+        # Blank line before bottom border
+        draw_row(start_y + box_h - 2, blank)
+
+        # Bottom border with hint
+        hint = " Tab:Next ^A:AND/OR ^R:Clear Enter:Apply Esc:Cancel "
+        pad_total = box_w - 2 - len(hint)
+        pad_left = pad_total // 2
+        pad_right = pad_total - pad_left
+        bot_border = BL + HZ * pad_left + hint + HZ * pad_right + BR
+        self.safe_addstr(stdscr, start_y + box_h - 1, start_x, bot_border, border_attr)
+
+        # Show cursor in focused field
+        if cursor_y >= 0 and cursor_x >= 0:
+            curses.curs_set(1)
+            try:
+                stdscr.move(cursor_y, cursor_x)
+            except curses.error:
+                pass
+
     def close(self):
         self.conn.close()
 
 
 def main():
-    if len(sys.argv) != 2:
-        print("Usage: browse-sqlite3 <database.db>")
+    if len(sys.argv) < 2 or len(sys.argv) > 3:
+        print("Usage: browse-sqlite3 <database.db> [table]")
         sys.exit(1)
 
     db_path = sys.argv[1]
+    initial_table = sys.argv[2] if len(sys.argv) == 3 else None
 
     try:
         browser = SQLiteBrowser(db_path)
+        if initial_table:
+            # Find the table (case-insensitive match)
+            found = False
+            for i, (name, _cols) in enumerate(browser.tables):
+                if name.lower() == initial_table.lower():
+                    browser.selected_table_idx = i
+                    browser.load_table_data(name)
+                    browser.current_view = 'rows'
+                    found = True
+                    break
+            if not found:
+                print(f"Table not found: {initial_table}")
+                browser.close()
+                sys.exit(1)
         curses.wrapper(browser.run)
         browser.close()
     except sqlite3.Error as e:
