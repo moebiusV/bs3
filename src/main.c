@@ -1,3 +1,5 @@
+/* SPDX-License-Identifier: BSD-2-Clause */
+/* Copyright (c) 2026 David Walther */
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -9,7 +11,7 @@
 
 static void usage(void)
 {
-    fprintf(stderr, "Usage: bs3c <database.db> [table]\n");
+    fprintf(stderr, "Usage: bs3 <database.db> [table]\n");
     exit(1);
 }
 

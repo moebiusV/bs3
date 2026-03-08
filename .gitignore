@@ -1,5 +1,9 @@
 __pycache__/
 *.so
+*.o
 Makefile
 venv/
 browse-sqlite3-*.tar.gz
+bs3
+lib/sqlite3.c
+lib/sqlite3.h

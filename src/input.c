@@ -1,3 +1,5 @@
+/* SPDX-License-Identifier: BSD-2-Clause */
+/* Copyright (c) 2026 David Walther */
 #include "input.h"
 #include "ui.h"
 #include "uniwidth.h"
@@ -86,6 +88,9 @@ void input_handle_tables(Browser *b, int key, int height)
                 b->prompt_action = NULL; /* handled inline in prompt handler */
             }
         }
+        break;
+    case 'o':
+        browser_open_sort(b);
         break;
     case '/':
         b->find_mode = 1;
@@ -201,6 +206,12 @@ void input_handle_rows(Browser *b, int key, int height)
         break;
     case KEY_SRIGHT:
         b->row_horiz += 5;
+        break;
+    case 'o':
+        browser_open_sort(b);
+        break;
+    case 'f':
+        browser_enter_find_dialog(b);
         break;
     case '/':
         b->find_mode = 1;
@@ -334,6 +345,9 @@ void input_handle_edit(Browser *b, WINDOW *w, int key, int height, int width)
             b->prompt_action = NULL;
         }
         break;
+    case 'o':
+        browser_open_sort(b);
+        break;
     case ':':
         b->command_mode = 1;
         b->command_input[0] = '\0';
@@ -418,10 +432,25 @@ void input_handle_prompt(Browser *b, int key)
 void input_handle_find(Browser *b, int key)
 {
     switch (key) {
-    case '\n': case KEY_ENTER:
+    case '\n': case KEY_ENTER: {
         /* Apply filter */
-        strncpy(b->find_filter, b->find_input, sizeof(b->find_filter) - 1);
-        b->find_filter[sizeof(b->find_filter) - 1] = '\0';
+        /* Trim and check for empty/"." to clear */
+        const char *text = b->find_input;
+        while (*text == ' ') text++;
+        if (text[0] == '\0' || (text[0] == '.' && text[1] == '\0')) {
+            b->find_filter[0] = '\0';
+            free(b->find_where);
+            b->find_where = NULL;
+            if (b->find_params) {
+                for (int i = 0; i < b->nfind_params; i++) free(b->find_params[i]);
+                free(b->find_params);
+                b->find_params = NULL;
+            }
+            b->nfind_params = 0;
+        } else {
+            strncpy(b->find_filter, b->find_input, sizeof(b->find_filter) - 1);
+            b->find_filter[sizeof(b->find_filter) - 1] = '\0';
+        }
         b->find_mode = 0;
         /* Reload table data with filter if in rows view */
         if (b->current_view == VIEW_ROWS && b->current_table)
@@ -429,6 +458,7 @@ void input_handle_find(Browser *b, int key)
         b->sel_row = 0;
         b->row_scroll = 0;
         break;
+    }
     case 27: /* Esc */
     case 7:  /* ^G */
         b->find_mode = 0;
@@ -464,20 +494,207 @@ void input_handle_help(Browser *b, int key, int height)
     }
 }
 
-/* --- Sort mode (stub) --- */
+/* --- Sort mode --- */
 
 void input_handle_sort(Browser *b, int key, int height)
 {
-    (void)b; (void)key; (void)height;
-    /* TODO: Phase 4 */
+    (void)height;
+    int n = b->nsort_items;
+    if (n == 0) {
+        if (key == 27 || key == '\n' || key == KEY_ENTER)
+            b->sort_mode = 0;
+        return;
+    }
+
+    if (key == 'q') { b->quit_flag = 1; b->sort_mode = 0; return; }
+    if (key == KEY_F(1)) { b->help_mode = 1; b->help_scroll = 0; return; }
+    if (key == 3) { b->quit_flag = 1; b->sort_mode = 0; return; }
+    if (key == 27) { b->sort_mode = 0; return; }
+
+    if (key == KEY_DOWN || key == 'j') {
+        if (b->sort_grabbed >= 0) {
+            if (b->sort_context == 'r') {
+                /* Move active sort col priority down */
+                const char *item = b->sort_items[b->sort_selected];
+                int ai = -1;
+                for (int i = 0; i < b->nsort_active; i++)
+                    if (strcmp(b->sort_active_cols[i], item) == 0) { ai = i; break; }
+                if (ai >= 0 && ai < b->nsort_active - 1) {
+                    char *tmp;
+                    tmp = b->sort_active_cols[ai];
+                    b->sort_active_cols[ai] = b->sort_active_cols[ai + 1];
+                    b->sort_active_cols[ai + 1] = tmp;
+                    tmp = b->sort_directions[ai];
+                    b->sort_directions[ai] = b->sort_directions[ai + 1];
+                    b->sort_directions[ai + 1] = tmp;
+                    browser_apply_sort(b);
+                }
+            } else {
+                int gi = b->sort_grabbed;
+                if (gi < n - 1) {
+                    char *tmp = b->sort_items[gi];
+                    b->sort_items[gi] = b->sort_items[gi + 1];
+                    b->sort_items[gi + 1] = tmp;
+                    b->sort_grabbed = gi + 1;
+                    b->sort_selected = gi + 1;
+                    browser_apply_sort(b);
+                }
+            }
+        } else {
+            if (b->sort_selected < n - 1)
+                b->sort_selected++;
+        }
+    } else if (key == KEY_UP || key == 'k') {
+        if (b->sort_grabbed >= 0) {
+            if (b->sort_context == 'r') {
+                const char *item = b->sort_items[b->sort_selected];
+                int ai = -1;
+                for (int i = 0; i < b->nsort_active; i++)
+                    if (strcmp(b->sort_active_cols[i], item) == 0) { ai = i; break; }
+                if (ai > 0) {
+                    char *tmp;
+                    tmp = b->sort_active_cols[ai];
+                    b->sort_active_cols[ai] = b->sort_active_cols[ai - 1];
+                    b->sort_active_cols[ai - 1] = tmp;
+                    tmp = b->sort_directions[ai];
+                    b->sort_directions[ai] = b->sort_directions[ai - 1];
+                    b->sort_directions[ai - 1] = tmp;
+                    browser_apply_sort(b);
+                }
+            } else {
+                int gi = b->sort_grabbed;
+                if (gi > 0) {
+                    char *tmp = b->sort_items[gi];
+                    b->sort_items[gi] = b->sort_items[gi - 1];
+                    b->sort_items[gi - 1] = tmp;
+                    b->sort_grabbed = gi - 1;
+                    b->sort_selected = gi - 1;
+                    browser_apply_sort(b);
+                }
+            }
+        } else {
+            if (b->sort_selected > 0)
+                b->sort_selected--;
+        }
+    } else if (key == ' ' || key == '\n' || key == KEY_ENTER) {
+        if (b->sort_context == 'r') {
+            /* Toggle sort field */
+            const char *item = b->sort_items[b->sort_selected];
+            int ai = -1;
+            for (int i = 0; i < b->nsort_active; i++)
+                if (strcmp(b->sort_active_cols[i], item) == 0) { ai = i; break; }
+            if (ai >= 0) {
+                /* Remove */
+                free(b->sort_active_cols[ai]);
+                free(b->sort_directions[ai]);
+                for (int i = ai; i < b->nsort_active - 1; i++) {
+                    b->sort_active_cols[i] = b->sort_active_cols[i + 1];
+                    b->sort_directions[i] = b->sort_directions[i + 1];
+                }
+                b->nsort_active--;
+            } else {
+                /* Add */
+                b->sort_active_cols = xrealloc(b->sort_active_cols,
+                    (size_t)(b->nsort_active + 1) * sizeof(char *));
+                b->sort_directions = xrealloc(b->sort_directions,
+                    (size_t)(b->nsort_active + 1) * sizeof(char *));
+                b->sort_active_cols[b->nsort_active] = xstrdup(item);
+                b->sort_directions[b->nsort_active] = xstrdup("ASC");
+                b->nsort_active++;
+            }
+        } else {
+            /* Grab/drop */
+            if (b->sort_grabbed >= 0)
+                b->sort_grabbed = -1;
+            else
+                b->sort_grabbed = b->sort_selected;
+        }
+        browser_apply_sort(b);
+    } else if (key == 'a' && b->sort_context == 'r') {
+        const char *item = b->sort_items[b->sort_selected];
+        for (int i = 0; i < b->nsort_active; i++) {
+            if (strcmp(b->sort_active_cols[i], item) == 0) {
+                free(b->sort_directions[i]);
+                b->sort_directions[i] = xstrdup("ASC");
+                browser_apply_sort(b);
+                break;
+            }
+        }
+    } else if (key == 'd' && b->sort_context == 'r') {
+        const char *item = b->sort_items[b->sort_selected];
+        for (int i = 0; i < b->nsort_active; i++) {
+            if (strcmp(b->sort_active_cols[i], item) == 0) {
+                free(b->sort_directions[i]);
+                b->sort_directions[i] = xstrdup("DESC");
+                browser_apply_sort(b);
+                break;
+            }
+        }
+    } else if (key == 'r') {
+        browser_reset_sort(b);
+    }
+
+    /* Keep scroll in bounds */
+    if (b->sort_selected < b->sort_scroll)
+        b->sort_scroll = b->sort_selected;
+    else if (b->sort_selected >= b->sort_scroll + 20)
+        b->sort_scroll = b->sort_selected - 19;
 }
 
-/* --- Find dialog (stub) --- */
+/* --- Find dialog --- */
 
 void input_handle_find_dialog(Browser *b, int key)
 {
-    (void)b; (void)key;
-    /* TODO: Phase 4 */
+    if (key == 27) { /* Esc - cancel */
+        browser_free_find_dialog(b);
+        return;
+    }
+    if (key == '\n' || key == KEY_ENTER) {
+        browser_apply_find_dialog(b);
+        browser_free_find_dialog(b);
+        return;
+    }
+    if (key == 3) { /* ^C */
+        b->quit_flag = 1;
+        return;
+    }
+    if (key == 9) { /* Tab - next field */
+        b->find_dialog_focus = (b->find_dialog_focus + 1) % b->ncols;
+    } else if (key == KEY_BTAB) { /* Shift+Tab */
+        b->find_dialog_focus = (b->find_dialog_focus - 1 + b->ncols) % b->ncols;
+    } else if (key == KEY_DOWN) {
+        if (b->find_dialog_focus < b->ncols - 1)
+            b->find_dialog_focus++;
+    } else if (key == KEY_UP) {
+        if (b->find_dialog_focus > 0)
+            b->find_dialog_focus--;
+    } else if (key == KEY_BACKSPACE || key == 127) {
+        int idx = b->find_dialog_focus;
+        char *val = b->find_dialog_inputs[idx];
+        if (val && val[0]) {
+            size_t len = strlen(val);
+            val[len - 1] = '\0';
+        }
+    } else if (key >= 32 && key <= 126) {
+        int idx = b->find_dialog_focus;
+        char *old = b->find_dialog_inputs[idx];
+        size_t len = old ? strlen(old) : 0;
+        char *newval = xmalloc(len + 2);
+        if (old) memcpy(newval, old, len);
+        newval[len] = (char)key;
+        newval[len + 1] = '\0';
+        free(old);
+        b->find_dialog_inputs[idx] = newval;
+    } else if (key == 1) { /* ^A - toggle AND/OR */
+        int idx = b->find_dialog_focus;
+        b->find_dialog_and_flags[idx] = !b->find_dialog_and_flags[idx];
+    } else if (key == 18) { /* ^R - clear all */
+        for (int i = 0; i < b->ncols; i++) {
+            free(b->find_dialog_inputs[i]);
+            b->find_dialog_inputs[i] = xstrdup("");
+            b->find_dialog_and_flags[i] = 0;
+        }
+    }
 }
 
 /* --- External editor --- */
@@ -487,7 +704,7 @@ char *input_external_editor(const char *value)
     const char *editor = getenv("EDITOR");
     if (!editor) editor = "vi";
 
-    char tmppath[] = "/tmp/bs3c-XXXXXX";
+    char tmppath[] = "/tmp/bs3-XXXXXX";
     int fd = mkstemp(tmppath);
     if (fd < 0) return NULL;
 
@@ -549,7 +766,7 @@ void input_view_in_pager(const char *value)
     const char *pager = getenv("PAGER");
     if (!pager) pager = "less";
 
-    char tmppath[] = "/tmp/bs3c-XXXXXX";
+    char tmppath[] = "/tmp/bs3-XXXXXX";
     int fd = mkstemp(tmppath);
     if (fd < 0) return;
     size_t len = strlen(value);

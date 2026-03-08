@@ -11,36 +11,46 @@ prefix=/usr/local
 bindir=
 mandir=
 datarootdir=
-python=
+cc=
+use_system_sqlite=0
+static_ncurses=auto
 
 # Parse arguments
 for arg; do
-  case "$arg" in
-    --prefix=*)     prefix="${arg#--prefix=}" ;;
-    --bindir=*)     bindir="${arg#--bindir=}" ;;
-    --mandir=*)     mandir="${arg#--mandir=}" ;;
-    --datarootdir=*) datarootdir="${arg#--datarootdir=}" ;;
-    --with-python=*) python="${arg#--with-python=}" ;;
-    --help|-h)
-      cat <<EOF
+    case "$arg" in
+        --prefix=*)           prefix="${arg#--prefix=}" ;;
+        --bindir=*)           bindir="${arg#--bindir=}" ;;
+        --mandir=*)           mandir="${arg#--mandir=}" ;;
+        --datarootdir=*)      datarootdir="${arg#--datarootdir=}" ;;
+        --with-system-sqlite) use_system_sqlite=1 ;;
+        --with-static-ncurses) static_ncurses=yes ;;
+        --without-static-ncurses) static_ncurses=no ;;
+        --build=*|--host=*|--target=*) ;; # cross-compilation compat
+        CC=*)                 cc="${arg#CC=}" ;;
+        --help|-h)
+            cat <<EOF
 Usage: ./configure [OPTIONS]
 
 Options:
-  --prefix=DIR          installation prefix [/usr/local]
-  --bindir=DIR          user executables [PREFIX/bin]
-  --datarootdir=DIR     read-only arch-independent data root [PREFIX/share]
-  --mandir=DIR          man documentation [DATAROOTDIR/man]
-  --with-python=PATH    path to python3 interpreter
+  --prefix=DIR              installation prefix [/usr/local]
+  --bindir=DIR              user executables [PREFIX/bin]
+  --datarootdir=DIR         read-only data root [PREFIX/share]
+  --mandir=DIR              man documentation [DATAROOTDIR/man]
+  --with-system-sqlite      link against system libsqlite3 instead of amalgamation
+  --with-static-ncurses     force static linking of ncursesw
+  --without-static-ncurses  force dynamic linking of ncursesw
 
 Environment variables:
-  PYTHON                path to python3 interpreter
+  CC        C compiler
+  CFLAGS    Compiler flags
+  LDFLAGS   Linker flags
 EOF
-      exit 0
-      ;;
-    *)
-      echo "warning: unrecognized option: $arg" >&2
-      ;;
-  esac
+            exit 0
+            ;;
+        *)
+            echo "warning: unrecognized option: $arg" >&2
+            ;;
+    esac
 done
 
 # Derive defaults
@@ -48,53 +58,137 @@ done
 : "${bindir:=${prefix}/bin}"
 : "${mandir:=${datarootdir}/man}"
 
-# Find python3
-if [ -z "$python" ]; then
-  if [ -n "$PYTHON" ]; then
-    python="$PYTHON"
-  else
-    python=$(command -v python3 2>/dev/null || true)
-  fi
+# Find C compiler
+if [ -z "$cc" ]; then
+    cc="${CC:-}"
+fi
+if [ -z "$cc" ]; then
+    for try_cc in cc gcc clang; do
+        if command -v "$try_cc" >/dev/null 2>&1; then
+            cc="$try_cc"
+            break
+        fi
+    done
+fi
+if [ -z "$cc" ]; then
+    echo "error: no C compiler found. Set CC or install gcc/clang." >&2
+    exit 1
+fi
+echo "checking for C compiler... $cc"
+
+# Check compiler works
+tmpfile=$(mktemp /tmp/bs3-conftest-XXXXXX.c)
+cat > "$tmpfile" <<'CEOF'
+#include <stdio.h>
+int main(void) { return 0; }
+CEOF
+if ! "$cc" -o /dev/null "$tmpfile" 2>/dev/null; then
+    echo "error: $cc cannot compile a simple program" >&2
+    rm -f "$tmpfile"
+    exit 1
+fi
+rm -f "$tmpfile"
+
+# Check for ncursesw
+echo "checking for ncursesw..."
+NCURSES_CFLAGS=""
+NCURSES_LIBS=""
+
+if command -v pkg-config >/dev/null 2>&1; then
+    if pkg-config --exists ncursesw 2>/dev/null; then
+        # Strip _XOPEN_SOURCE from pkg-config flags (we set our own in CFLAGS)
+        NCURSES_CFLAGS=$(pkg-config --cflags ncursesw | sed 's/-D_XOPEN_SOURCE=[^ ]*//g; s/-D_XOPEN_SOURCE_EXTENDED//g')
+        NCURSES_LIBS=$(pkg-config --libs ncursesw)
+        echo "  found via pkg-config: $NCURSES_LIBS"
+    fi
 fi
 
-if [ -z "$python" ]; then
-  echo "error: python3 not found. Use --with-python=PATH or set \$PYTHON." >&2
-  exit 1
+if [ -z "$NCURSES_LIBS" ]; then
+    tmpfile=$(mktemp /tmp/bs3-conftest-XXXXXX.c)
+    cat > "$tmpfile" <<'CEOF'
+#include <ncursesw/curses.h>
+int main(void) { initscr(); endwin(); return 0; }
+CEOF
+    if "$cc" -o /dev/null "$tmpfile" -lncursesw 2>/dev/null; then
+        NCURSES_LIBS="-lncursesw"
+        echo "  found: -lncursesw"
+    elif "$cc" -o /dev/null "$tmpfile" -lncurses 2>/dev/null; then
+        NCURSES_LIBS="-lncurses"
+        echo "  found: -lncurses (warning: may lack wide-char support)"
+    else
+        echo "error: ncursesw not found. Install libncursesw5-dev or ncurses-devel." >&2
+        rm -f "$tmpfile"
+        exit 1
+    fi
+    rm -f "$tmpfile"
 fi
 
-if ! command -v "$python" >/dev/null 2>&1; then
-  echo "error: $python not found or not executable." >&2
-  exit 1
+# Decide static vs dynamic ncurses
+LIBS="$NCURSES_LIBS"
+if [ "$static_ncurses" = "yes" ] || [ "$static_ncurses" = "auto" ]; then
+    ncurses_static_a=""
+    for dir in /usr/lib /usr/lib/x86_64-linux-gnu /usr/lib64 /usr/local/lib; do
+        if [ -f "$dir/libncursesw.a" ]; then
+            ncurses_static_a="$dir/libncursesw.a"
+            break
+        fi
+    done
+    if [ -n "$ncurses_static_a" ]; then
+        LIBS="$ncurses_static_a"
+        tinfo_a=$(echo "$ncurses_static_a" | sed 's/libncursesw\.a/libtinfo.a/')
+        if [ -f "$tinfo_a" ]; then
+            LIBS="$LIBS $tinfo_a"
+        fi
+        echo "  static ncurses: $LIBS"
+    elif [ "$static_ncurses" = "yes" ]; then
+        echo "error: --with-static-ncurses requested but libncursesw.a not found" >&2
+        exit 1
+    fi
 fi
 
-# Check python3 modules
-echo "checking for python3... $python"
-
-if ! "$python" -c "import sqlite3" 2>/dev/null; then
-  echo "error: python3 sqlite3 module not found." >&2
-  exit 1
+# SQLite
+SQLITE_CFLAGS=""
+SQLITE_OBJ=""
+if [ "$use_system_sqlite" = "1" ]; then
+    echo "checking for system sqlite3..."
+    if command -v pkg-config >/dev/null 2>&1 && pkg-config --exists sqlite3 2>/dev/null; then
+        SQLITE_CFLAGS=$(pkg-config --cflags sqlite3)
+        LIBS="$LIBS $(pkg-config --libs sqlite3)"
+        echo "  found via pkg-config"
+    else
+        LIBS="$LIBS -lsqlite3"
+        echo "  assuming -lsqlite3"
+    fi
+else
+    if [ ! -f lib/sqlite3.c ]; then
+        echo "SQLite amalgamation not found. Run: ./fetch-sqlite.sh"
+        exit 1
+    fi
+    echo "using bundled SQLite amalgamation"
+    SQLITE_CFLAGS="-Ilib -DSQLITE_THREADSAFE=0 -DSQLITE_OMIT_LOAD_EXTENSION"
+    SQLITE_OBJ="lib/sqlite3.o"
 fi
-echo "checking for sqlite3 module... yes"
 
-if ! "$python" -c "import curses" 2>/dev/null; then
-  echo "error: python3 curses module not found." >&2
-  exit 1
-fi
-echo "checking for curses module... yes"
+# Add pthread and dl
+LIBS="$LIBS -lpthread -ldl"
 
-# Generate Makefile from Makefile.in
+# Honor environment flags, provide defaults
+: "${CFLAGS:=-O2 -Wall -Wextra}"
+
+# Generate Makefile
 sed \
-  -e "s|@PREFIX@|${prefix}|g" \
-  -e "s|@BINDIR@|${bindir}|g" \
-  -e "s|@MANDIR@|${mandir}|g" \
-  -e "s|@PYTHON@|${python}|g" \
-  -e "s|@VERSION@|${VERSION}|g" \
-  Makefile.in > Makefile
-
-# Configure C version
-echo ""
-echo "Configuring C version..."
-(cd c && ./configure --prefix="$prefix" --bindir="$bindir" --mandir="$mandir")
+    -e "s|@CC@|${cc}|g" \
+    -e "s|@CFLAGS@|${CFLAGS}|g" \
+    -e "s|@LDFLAGS@|${LDFLAGS:-}|g" \
+    -e "s|@LIBS@|${LIBS}|g" \
+    -e "s|@NCURSES_CFLAGS@|${NCURSES_CFLAGS}|g" \
+    -e "s|@SQLITE_CFLAGS@|${SQLITE_CFLAGS}|g" \
+    -e "s|@SQLITE_OBJ@|${SQLITE_OBJ}|g" \
+    -e "s|@PREFIX@|${prefix}|g" \
+    -e "s|@BINDIR@|${bindir}|g" \
+    -e "s|@MANDIR@|${mandir}|g" \
+    -e "s|@VERSION@|${VERSION}|g" \
+    Makefile.in > Makefile
 
 echo ""
 echo "browse-sqlite3 $VERSION configured."
@@ -102,5 +196,8 @@ echo ""
 echo "  prefix:    $prefix"
 echo "  bindir:    $bindir"
 echo "  mandir:    $mandir"
+echo "  compiler:  $cc"
+echo "  sqlite:    $([ "$use_system_sqlite" = "1" ] && echo "system" || echo "bundled amalgamation")"
+echo "  ncurses:   $LIBS"
 echo ""
-echo "Run 'make' and 'make install' to install."
+echo "Run 'make' to build."

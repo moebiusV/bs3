@@ -1,6 +1,0 @@
-bs3c
-*.o
-Makefile
-lib/sqlite3.c
-lib/sqlite3.h
-*.tar.gz

@@ -1,3 +1,5 @@
+/* SPDX-License-Identifier: BSD-2-Clause */
+/* Copyright (c) 2026 David Walther */
 #ifndef BROWSER_H
 #define BROWSER_H
 
@@ -73,6 +75,10 @@ typedef struct Browser {
     int sort_selected;
     int sort_grabbed;        /* -1 = not grabbed */
     int sort_scroll;
+    /* Row sort state (for sort_context == 'r') */
+    char **sort_active_cols;
+    char **sort_directions;  /* "ASC" or "DESC" per active col */
+    int nsort_active;
 
     /* Find/filter */
     int find_mode;
@@ -118,5 +124,20 @@ void browser_cache_row_strings(Browser *b);
 
 /* Set a status message (takes ownership of msg if heap-allocated) */
 void browser_set_message(Browser *b, const char *msg);
+
+/* Sort overlay */
+void browser_open_sort(Browser *b);
+void browser_apply_sort(Browser *b);
+void browser_reset_sort(Browser *b);
+void browser_free_sort_state(Browser *b);
+
+/* Find operations */
+void browser_parse_find_pattern(Browser *b, const char *pattern);
+void browser_enter_find_dialog(Browser *b);
+void browser_apply_find_dialog(Browser *b);
+void browser_free_find_dialog(Browser *b);
+
+/* Config-driven table order */
+void browser_load_config(Browser *b);
 
 #endif

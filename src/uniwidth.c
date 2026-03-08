@@ -1,3 +1,5 @@
+/* SPDX-License-Identifier: BSD-2-Clause */
+/* Copyright (c) 2026 David Walther */
 #include "uniwidth.h"
 #include "util.h"
 #include <stdlib.h>
