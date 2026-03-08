@@ -328,10 +328,10 @@ class SQLiteBrowser:
 
     def get_display_width(self, text: str) -> int:
         """Calculate display width considering East Asian and zero-width characters"""
-        if _USE_C_WIDTH:
-            return _c_display_width(text)
         if text.isascii():
             return len(text)
+        if _USE_C_WIDTH:
+            return _c_display_width(text)
         width = 0
         for char in text:
             width += self._char_width(char)
@@ -339,10 +339,10 @@ class SQLiteBrowser:
 
     def skip_display_cols(self, text: str, cols: int) -> str:
         """Skip *cols* display columns from the start of *text* and return the rest."""
-        if _USE_C_WIDTH:
-            return _c_skip_display_cols(text, cols)
         if text.isascii():
             return text[cols:] if cols < len(text) else ''
+        if _USE_C_WIDTH:
+            return _c_skip_display_cols(text, cols)
         w = 0
         for i, char in enumerate(text):
             cw = self._char_width(char)
@@ -361,10 +361,10 @@ class SQLiteBrowser:
 
     def truncate_to_width(self, text: str, max_w: int) -> str:
         """Truncate text to fit within display width"""
-        if _USE_C_WIDTH:
-            return _c_truncate_to_width(text, max_w)
         if text.isascii():
             return text[:max_w] if len(text) > max_w else text
+        if _USE_C_WIDTH:
+            return _c_truncate_to_width(text, max_w)
         w = 0
         parts = []
         for char in text:
