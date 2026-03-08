@@ -10,8 +10,7 @@ Most SQLite tools fall into two camps: command-line shells that require
 you to type SQL for everything, and GUI applications that require a
 desktop environment.  browse-sqlite3 fills the gap: a full-screen
 terminal application that lets you browse tables, scroll through rows,
-and edit fields interactively -- no SQL required, no GUI needed.  It
-runs anywhere you have a terminal and Python.
+and edit fields interactively -- no SQL required, no GUI needed.
 
 ## Features
 
@@ -36,8 +35,6 @@ runs anywhere you have a terminal and Python.
   `v`/Enter to view in `$PAGER`
 - **East Asian wide-character support** -- correct display-width
   accounting for CJK, emoji, combining marks, and zero-width characters
-- **Optional C accelerator** -- `_displaywidth.c` provides 3-5x faster
-  Unicode width calculations for non-ASCII content
 - **Smooth scrolling** -- 30fps frame-paced input with axis-aware
   batching prevents key flooding during held navigation
 
@@ -66,18 +63,13 @@ make check
 sudo make install
 ```
 
-The C extension is built automatically if a C compiler is available.
-If it fails or is absent, browse-sqlite3 falls back to pure Python
-with no loss of functionality.
-
 ## Dependencies
 
 | Dependency | Notes |
 |------------|-------|
-| Python 3.6+ | with `sqlite3` and `curses` modules (both in the standard library) |
-| C compiler | optional, for the `_displaywidth` accelerator module |
-
-No third-party Python packages are required.
+| C compiler | gcc or clang |
+| ncurses | `sudo apt-get install libncurses-dev` |
+| SQLite 3 | bundled if not found on system |
 
 ## Usage
 

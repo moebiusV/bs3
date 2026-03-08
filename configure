@@ -91,12 +91,16 @@ sed \
   -e "s|@VERSION@|${VERSION}|g" \
   Makefile.in > Makefile
 
+# Configure C version
+echo ""
+echo "Configuring C version..."
+(cd c && ./configure --prefix="$prefix" --bindir="$bindir" --mandir="$mandir")
+
 echo ""
 echo "browse-sqlite3 $VERSION configured."
 echo ""
 echo "  prefix:    $prefix"
 echo "  bindir:    $bindir"
 echo "  mandir:    $mandir"
-echo "  python:    $python"
 echo ""
 echo "Run 'make' and 'make install' to install."

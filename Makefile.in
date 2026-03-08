@@ -1,25 +1,20 @@
 PREFIX  = @PREFIX@
 BINDIR  = @BINDIR@
 MANDIR  = @MANDIR@
-PYTHON  = @PYTHON@
 VERSION = @VERSION@
 
 PROG    = browse-sqlite3
 ALIAS   = bs3
 MANPAGE = browse-sqlite3.1
-EXT_SUFFIX = $(shell $(PYTHON) -c "import sysconfig; print(sysconfig.get_config_var('EXT_SUFFIX'))")
-EXT_MOD = _displaywidth$(EXT_SUFFIX)
 
 .PHONY: all install uninstall clean distclean dist check
 
-all: $(EXT_MOD)
+all:
+	$(MAKE) -C c
 
-$(EXT_MOD): _displaywidth.c
-	$(CC) -shared -fPIC -O2 $$($(PYTHON) -c "import sysconfig; print(sysconfig.get_config_var('CFLAGS') or '')") $$($(PYTHON)-config --includes) -o $@ $<
-
-install:
+install: all
 	install -d $(DESTDIR)$(BINDIR)
-	install -m 755 $(PROG) $(DESTDIR)$(BINDIR)/$(PROG)
+	install -m 755 c/bs3 $(DESTDIR)$(BINDIR)/$(PROG)
 	ln -sf $(PROG) $(DESTDIR)$(BINDIR)/$(ALIAS)
 	install -d $(DESTDIR)$(MANDIR)/man1
 	install -m 644 $(MANPAGE) $(DESTDIR)$(MANDIR)/man1/$(MANPAGE)
@@ -32,12 +27,14 @@ uninstall:
 	rm -f $(DESTDIR)$(MANDIR)/man1/$(ALIAS).1
 
 clean:
-	rm -f $(EXT_MOD) Makefile
+	$(MAKE) -C c clean
 
 distclean: clean
+	rm -f Makefile
+	rm -f c/Makefile
 
 EXTRA_DIST = \
-	$(PROG) $(MANPAGE) _displaywidth.c configure Makefile.in \
+	browse-sqlite3.py $(MANPAGE) _displaywidth.c configure Makefile.in \
 	README.md COPYING AUTHORS NEWS ChangeLog INSTALL \
 	README.distributions CLAUDE.md .gitignore \
 	dist/rpm/browse-sqlite3.spec \
@@ -62,10 +59,11 @@ dist:
 		mkdir -p $(PROG)-$(VERSION)/$$(dirname $$f); \
 		cp $$f $(PROG)-$(VERSION)/$$f; \
 	done
+	cp -r c $(PROG)-$(VERSION)/
 	tar czf $(PROG)-$(VERSION).tar.gz $(PROG)-$(VERSION)
 	rm -rf $(PROG)-$(VERSION)
 	@echo "Created $(PROG)-$(VERSION).tar.gz"
 
-check:
-	$(PYTHON) -c "import py_compile; py_compile.compile('$(PROG)', doraise=True)"
-	@echo "Syntax check passed."
+check: all
+	c/bs3 --help 2>&1 || true
+	@echo "Build check passed."
