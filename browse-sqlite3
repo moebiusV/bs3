@@ -129,13 +129,36 @@ class SQLiteBrowser:
         return self.apply_table_order(tables)
 
     # ----------------------------------------------------------------
+    # Read-only detection
+    # ----------------------------------------------------------------
+
+    def _readonly_message(self) -> str:
+        """Build a status message for read-only database failures."""
+        import stat
+        try:
+            st = os.stat(self.db_path)
+            mode = stat.filemode(st.st_mode)
+            try:
+                import pwd, grp
+                owner = pwd.getpwuid(st.st_uid).pw_name
+                group = grp.getgrgid(st.st_gid).gr_name
+                perms = f"{mode} {owner}:{group}"
+            except (ImportError, KeyError):
+                perms = mode
+            return f"Database is read-only ({perms})"
+        except OSError:
+            return "Database is read-only"
+
     # Config persistence (_browse_config table)
     # ----------------------------------------------------------------
 
     def ensure_config_table(self):
         """Create _browse_config table if it doesn't exist"""
-        self.cursor.execute("CREATE TABLE IF NOT EXISTS _browse_config (key TEXT PRIMARY KEY, value TEXT NOT NULL)")
-        self.conn.commit()
+        try:
+            self.cursor.execute("CREATE TABLE IF NOT EXISTS _browse_config (key TEXT PRIMARY KEY, value TEXT NOT NULL)")
+            self.conn.commit()
+        except sqlite3.OperationalError:
+            pass  # read-only database
 
     def load_config(self, key: str):
         """Read a JSON config value, return None if missing"""
@@ -150,10 +173,13 @@ class SQLiteBrowser:
 
     def save_config(self, key: str, value):
         """Upsert a JSON config value, creating the table if needed"""
-        self.ensure_config_table()
-        json_val = json.dumps(value)
-        self.cursor.execute("INSERT OR REPLACE INTO _browse_config (key, value) VALUES (?, ?)", (key, json_val))
-        self.conn.commit()
+        try:
+            self.ensure_config_table()
+            json_val = json.dumps(value)
+            self.cursor.execute("INSERT OR REPLACE INTO _browse_config (key, value) VALUES (?, ?)", (key, json_val))
+            self.conn.commit()
+        except sqlite3.OperationalError:
+            pass  # read-only database
 
     def load_all_config(self):
         """Load cached config values at startup"""
@@ -253,6 +279,9 @@ class SQLiteBrowser:
             if self.selected_row_idx >= len(self.current_table_data):
                 self.selected_row_idx = max(0, len(self.current_table_data) - 1)
             return True
+        except sqlite3.OperationalError:
+            self.message = self._readonly_message()
+            return False
         except sqlite3.Error:
             return False
 
@@ -267,6 +296,9 @@ class SQLiteBrowser:
             self.tables = self.get_tables()
             self.selected_table_idx = max(0, min(self.selected_table_idx, len(self.tables) - 1))
             return True
+        except sqlite3.OperationalError:
+            self.message = self._readonly_message()
+            return False
         except sqlite3.Error:
             return False
 
@@ -292,6 +324,9 @@ class SQLiteBrowser:
             self.conn.commit()
             self.load_table_data(self.current_table_name)
             return True
+        except sqlite3.OperationalError:
+            self.message = self._readonly_message()
+            return False
         except sqlite3.Error:
             return False
 
@@ -1268,8 +1303,8 @@ class SQLiteBrowser:
             if filtered_tables:
                 table_name = filtered_tables[self.selected_table_idx][0]
                 if not self.safe_mode:
-                    self.drop_current_table()
-                    self.message = f"Dropped table: {table_name}"
+                    if self.drop_current_table():
+                        self.message = f"Dropped table: {table_name}"
                 else:
                     self.prompt_mode = True
                     self.prompt_text = f" Drop table '{table_name}'? (y/n) "
@@ -1384,7 +1419,7 @@ class SQLiteBrowser:
         elif key == ord('s'):
             if self.save_edit_changes():
                 self.message = "Changes saved."
-            else:
+            elif not self.message:
                 self.message = "Save failed!"
         elif key in (curses.KEY_BACKSPACE, 127, ord('h'), curses.KEY_LEFT):
             if self.has_unsaved_changes():
