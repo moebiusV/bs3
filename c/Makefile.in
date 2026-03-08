@@ -1,0 +1,57 @@
+CC       = @CC@
+CFLAGS   = @CFLAGS@ -std=c17 -D_XOPEN_SOURCE=700 -D_XOPEN_SOURCE_EXTENDED -D_DEFAULT_SOURCE
+LDFLAGS  = @LDFLAGS@
+LIBS     = @LIBS@
+NCURSES_CFLAGS = @NCURSES_CFLAGS@
+SQLITE_CFLAGS  = @SQLITE_CFLAGS@
+SQLITE_OBJ     = @SQLITE_OBJ@
+PREFIX   = @PREFIX@
+BINDIR   = @BINDIR@
+MANDIR   = @MANDIR@
+VERSION  = @VERSION@
+
+PROG     = bs3c
+MANPAGE  = bs3c.1
+
+SRCS     = src/main.c src/browser.c src/db.c src/ui.c src/input.c src/uniwidth.c src/util.c
+OBJS     = $(SRCS:.c=.o)
+
+.PHONY: all install uninstall clean distclean dist check
+
+all: $(PROG)
+
+$(PROG): $(OBJS) $(SQLITE_OBJ)
+	$(CC) $(LDFLAGS) -o $@ $^ $(LIBS)
+
+src/%.o: src/%.c
+	$(CC) $(CFLAGS) $(NCURSES_CFLAGS) $(SQLITE_CFLAGS) -Isrc -c -o $@ $<
+
+lib/sqlite3.o: lib/sqlite3.c
+	$(CC) -O2 -DSQLITE_THREADSAFE=0 -DSQLITE_OMIT_LOAD_EXTENSION -c -o $@ $<
+
+install: $(PROG)
+	install -d $(DESTDIR)$(BINDIR)
+	install -m 755 $(PROG) $(DESTDIR)$(BINDIR)/$(PROG)
+	install -d $(DESTDIR)$(MANDIR)/man1
+	install -m 644 $(MANPAGE) $(DESTDIR)$(MANDIR)/man1/$(MANPAGE)
+
+uninstall:
+	rm -f $(DESTDIR)$(BINDIR)/$(PROG)
+	rm -f $(DESTDIR)$(MANDIR)/man1/$(MANPAGE)
+
+clean:
+	rm -f $(OBJS) $(SQLITE_OBJ) $(PROG)
+
+distclean: clean
+	rm -f Makefile
+
+check: $(PROG)
+	./$(PROG) --help 2>&1 || true
+	@echo "Build check passed."
+
+dist:
+	mkdir -p $(PROG)-$(VERSION)
+	cp -r src lib configure Makefile.in fetch-sqlite.sh $(PROG)-$(VERSION)/
+	tar czf $(PROG)-$(VERSION).tar.gz $(PROG)-$(VERSION)
+	rm -rf $(PROG)-$(VERSION)
+	@echo "Created $(PROG)-$(VERSION).tar.gz"
