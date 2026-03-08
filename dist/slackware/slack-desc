@@ -1,0 +1,12 @@
+              |-----handy-ruler------------------------------------------------------|
+browse-sqlite3: browse-sqlite3 (interactive terminal browser for SQLite databases)
+browse-sqlite3:
+browse-sqlite3: browse-sqlite3 is a full-screen TUI browser for SQLite databases
+browse-sqlite3: with vi-style navigation, readline-style inline editing,
+browse-sqlite3: multi-column sort, structured search, and a Turbo Pascal-inspired
+browse-sqlite3: CGA color scheme.
+browse-sqlite3:
+browse-sqlite3: Homepage: https://github.com/moebiusV/bs3
+browse-sqlite3:
+browse-sqlite3:
+browse-sqlite3:

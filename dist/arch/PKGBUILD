@@ -1,0 +1,29 @@
+# Maintainer: MAINTAINER_NAME <MAINTAINER_EMAIL>
+pkgname=browse-sqlite3
+pkgver=1.0
+pkgrel=1
+pkgdesc="Interactive terminal browser for SQLite databases"
+arch=('x86_64')
+url="https://github.com/moebiusV/bs3"
+license=('BSD-2-Clause')
+depends=('python')
+makedepends=('gcc' 'python')
+source=("$pkgname-$pkgver.tar.gz")
+sha256sums=('SKIP')
+
+build() {
+    cd "$pkgname-$pkgver"
+    ./configure --prefix=/usr
+    make
+}
+
+check() {
+    cd "$pkgname-$pkgver"
+    make check
+}
+
+package() {
+    cd "$pkgname-$pkgver"
+    make DESTDIR="$pkgdir" install
+    install -Dm644 COPYING "$pkgdir/usr/share/licenses/$pkgname/COPYING"
+}

@@ -1,0 +1,3 @@
+browse-sqlite3 is a full-screen TUI browser for SQLite databases with
+vi-style navigation, readline-style inline editing, multi-column sort,
+structured search, and a Turbo Pascal-inspired CGA color scheme.

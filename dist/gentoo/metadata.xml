@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE pkgmetadata SYSTEM "https://www.gentoo.org/dtd/metadata.dtd">
+<pkgmetadata>
+  <maintainer type="person">
+    <email>MAINTAINER_EMAIL</email>
+    <name>MAINTAINER_NAME</name>
+  </maintainer>
+  <longdescription lang="en">
+    browse-sqlite3 is a full-screen TUI browser for SQLite databases with
+    vi-style navigation, readline-style inline editing, multi-column sort,
+    structured search, and a Turbo Pascal-inspired CGA color scheme.
+  </longdescription>
+  <upstream>
+    <remote-id type="github">moebiusV/bs3</remote-id>
+  </upstream>
+</pkgmetadata>

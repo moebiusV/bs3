@@ -1,0 +1,17 @@
+Source: browse-sqlite3
+Section: database
+Priority: optional
+Maintainer: MAINTAINER_NAME <MAINTAINER_EMAIL>
+Build-Depends: debhelper-compat (= 13), python3-dev, gcc
+Standards-Version: 4.6.2
+Homepage: https://github.com/moebiusV/bs3
+
+Package: browse-sqlite3
+Architecture: any
+Depends: python3, ${shlibs:Depends}, ${misc:Depends}
+Description: Interactive terminal browser for SQLite databases
+ browse-sqlite3 is a full-screen TUI browser for SQLite databases with
+ vi-style navigation, readline-style inline editing, multi-column sort,
+ structured search, and a Turbo Pascal-inspired CGA color scheme.
+ .
+ Also installs a bs3 symlink as a short alias.

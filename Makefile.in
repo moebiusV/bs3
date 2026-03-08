@@ -36,9 +36,32 @@ clean:
 
 distclean: clean
 
+EXTRA_DIST = \
+	$(PROG) $(MANPAGE) _displaywidth.c configure Makefile.in \
+	README.md COPYING AUTHORS NEWS ChangeLog INSTALL \
+	README.distributions CLAUDE.md .gitignore \
+	dist/rpm/browse-sqlite3.spec \
+	dist/debian/control dist/debian/rules \
+	dist/debian/changelog dist/debian/copyright \
+	dist/arch/PKGBUILD \
+	dist/alpine/APKBUILD \
+	dist/freebsd/Makefile dist/freebsd/pkg-descr \
+	dist/freebsd/pkg-plist dist/freebsd/distinfo \
+	dist/openbsd/Makefile dist/openbsd/pkg/DESCR dist/openbsd/pkg/PLIST \
+	dist/netbsd/Makefile dist/netbsd/DESCR \
+	dist/netbsd/PLIST dist/netbsd/distinfo \
+	dist/gentoo/browse-sqlite3-1.0.ebuild dist/gentoo/metadata.xml \
+	dist/nixos/default.nix \
+	dist/slackware/browse-sqlite3.SlackBuild \
+	dist/slackware/slack-desc dist/slackware/browse-sqlite3.info
+
 dist:
+	rm -rf $(PROG)-$(VERSION)
 	mkdir -p $(PROG)-$(VERSION)
-	cp $(PROG) $(MANPAGE) configure Makefile.in $(PROG)-$(VERSION)/
+	for f in $(EXTRA_DIST); do \
+		mkdir -p $(PROG)-$(VERSION)/$$(dirname $$f); \
+		cp $$f $(PROG)-$(VERSION)/$$f; \
+	done
 	tar czf $(PROG)-$(VERSION).tar.gz $(PROG)-$(VERSION)
 	rm -rf $(PROG)-$(VERSION)
 	@echo "Created $(PROG)-$(VERSION).tar.gz"

@@ -1,0 +1,199 @@
+Packaging browse-sqlite3 for Distributions
+==========================================
+
+This file is for distribution packagers who want to add browse-sqlite3
+to their distro's package repository.  Template packaging files for
+several systems are provided under dist/.  Each is roughly 90% complete
+-- the packager fills in maintainer details, changelog, and
+distro-specific adjustments.
+
+What browse-sqlite3 Is
+----------------------
+
+browse-sqlite3 is a full-screen TUI browser for SQLite databases,
+written in Python.  It provides table browsing, row navigation, and
+field editing with vi-style keybindings and a Turbo Pascal-inspired
+color scheme.  An optional C extension accelerates Unicode display-width
+calculations.
+
+Also installs a bs3 symlink as a short alias.
+
+Dependencies
+------------
+
+Build-time:
+  - Python 3.6+ with sqlite3 and curses modules
+  - A C compiler (gcc, clang) for the optional _displaywidth extension
+  - Python development headers (python3-dev / python3-devel) for the
+    C extension
+
+Runtime:
+  - Python 3.6+ with sqlite3 and curses modules
+
+How the Build Works
+-------------------
+
+1. ./configure detects Python, checks for sqlite3 and curses modules,
+   and generates a Makefile from Makefile.in.
+2. make compiles the optional C extension.
+3. make install copies the script, C extension, manpage, and symlinks.
+
+The configure script is hand-written POSIX shell -- no autoconf or
+automake is required.  The build is simple enough that distro-specific
+build systems can bypass configure entirely and install the files
+directly.
+
+What Gets Installed
+-------------------
+
+  $bindir/browse-sqlite3       Main program (Python script)
+  $bindir/bs3                  Symlink to browse-sqlite3
+  $mandir/man1/browse-sqlite3.1   Manpage
+  $mandir/man1/bs3.1           Symlink to browse-sqlite3.1
+
+The C extension (_displaywidth*.so) is loaded from the script's
+directory or Python's import path at runtime.  If not found, the
+program falls back to pure Python.
+
+License
+-------
+
+BSD-2-Clause.  See COPYING.
+
+Per-Distribution Notes
+======================
+
+RPM (Fedora / RHEL / CentOS)
+-----------------------------
+
+  Files:  dist/rpm/browse-sqlite3.spec
+
+  Customize:
+    - URL field (your fork or upstream)
+    - %changelog section (add your name and entry)
+    - Source0 URL if hosting your own tarball
+    - Release tag / dist suffix as appropriate
+
+  Build:  rpmbuild -ba dist/rpm/browse-sqlite3.spec
+  Submit: Fedora -- follow the Fedora Package Review process
+          EPEL -- follow EPEL packaging guidelines
+
+Debian / Ubuntu
+---------------
+
+  Files:  dist/debian/
+
+  Customize:
+    - debian/changelog -- add your name, email, date, version
+    - debian/control -- Maintainer field
+    - Review debian/copyright for accuracy
+
+  Build:  dpkg-buildpackage -us -uc
+  Submit: File an ITP (Intent to Package) bug against wnpp
+
+Arch Linux
+----------
+
+  Files:  dist/arch/PKGBUILD
+
+  Customize:
+    - Maintainer line at the top
+    - source URL
+    - sha256sums (run updpkgsums)
+
+  Build:  makepkg -si
+  Submit: Upload to AUR
+
+Alpine Linux
+------------
+
+  Files:  dist/alpine/APKBUILD
+
+  Customize:
+    - Maintainer line at the top
+    - source URL
+    - sha512sums (run abuild checksum)
+
+  Build:  abuild -r
+  Submit: Open a merge request against aports.git
+
+FreeBSD
+-------
+
+  Files:  dist/freebsd/
+
+  Customize:
+    - MAINTAINER email
+    - distinfo -- fill in real SHA256 and SIZE from your tarball
+    - Adjust MASTER_SITES if hosting the tarball yourself
+    - Review pkg-plist after a test install
+
+  Build:  make -C dist/freebsd install (in a ports tree)
+  Submit: File a FreeBSD bug / send-pr with category "ports"
+
+OpenBSD
+-------
+
+  Files:  dist/openbsd/
+
+  Customize:
+    - MAINTAINER email
+    - Review pkg/PLIST after a test install
+
+  Build:  make -C dist/openbsd install (in a ports tree)
+  Submit: Send a diff to ports@openbsd.org
+
+NetBSD
+------
+
+  Files:  dist/netbsd/
+
+  Customize:
+    - MAINTAINER email
+    - distinfo -- fill in real hashes from your tarball (make distinfo)
+    - MASTER_SITES if hosting the tarball yourself
+    - Review PLIST after a test install
+
+  Build:  bmake install (in a pkgsrc tree)
+  Submit: Send a diff to pkgsrc-wip or the pkgsrc-changes list
+
+Gentoo
+------
+
+  Files:  dist/gentoo/
+
+  Customize:
+    - metadata.xml -- maintainer name and email
+    - Ebuild filename matches version (rename if bumping)
+    - KEYWORDS -- adjust for your target architectures
+    - SRC_URI -- point to your tarball or GitHub release
+
+  Build:  ebuild dist/gentoo/browse-sqlite3-1.0.ebuild manifest && emerge browse-sqlite3
+  Submit: File a bug at bugs.gentoo.org with category "Ebuild"
+          or maintain via the GURU overlay
+
+NixOS
+-----
+
+  Files:  dist/nixos/default.nix
+
+  Customize:
+    - fetchFromGitHub owner and hash (use nix-prefetch-url or nix flake)
+    - meta.maintainers -- add your nixpkgs maintainer handle
+    - Version string
+
+  Build:  nix-build -E 'with import <nixpkgs> {}; callPackage ./dist/nixos/default.nix {}'
+  Submit: Open a PR against nixpkgs adding the package under pkgs/
+
+Slackware
+---------
+
+  Files:  dist/slackware/
+
+  Customize:
+    - browse-sqlite3.SlackBuild -- copyright header (your name)
+    - browse-sqlite3.info -- MD5SUM, MAINTAINER, EMAIL
+    - slack-desc -- homepage URL
+
+  Build:  source browse-sqlite3.info && sh browse-sqlite3.SlackBuild
+  Submit: Submit to SlackBuilds.org (SBo)

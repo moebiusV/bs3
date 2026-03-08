@@ -1,0 +1,43 @@
+Installation Instructions
+=========================
+
+Prerequisites:
+
+    - Python 3.6+ with sqlite3 and curses modules
+    - A C compiler (optional, for the display-width accelerator)
+
+Quick install:
+
+    ./configure
+    make
+    make check
+    sudo make install
+
+This installs browse-sqlite3 (and a bs3 symlink) to $prefix/bin and
+the manpage to $prefix/share/man/man1.
+
+To specify an install prefix:
+
+    ./configure --prefix=/usr/local
+
+To specify a different Python interpreter:
+
+    ./configure --with-python=/usr/bin/python3.12
+
+The C extension (_displaywidth) is built automatically if a C compiler
+is available.  If compilation fails, browse-sqlite3 falls back to a
+pure-Python implementation with no loss of functionality.
+
+To uninstall:
+
+    sudo make uninstall
+
+Standard targets:
+
+    make            Build the C extension
+    make install    Install program, alias, and manpage
+    make uninstall  Remove installed files
+    make clean      Remove build artifacts
+    make distclean  Remove build artifacts and generated Makefile
+    make check      Run syntax check
+    make dist       Create a release tarball

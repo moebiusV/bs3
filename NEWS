@@ -1,0 +1,14 @@
+browse-sqlite3 1.0 (2026-02-21)
+--------------------------------
+- Initial release
+- Three-view TUI: table list, row browser, field editor
+- Vi-style navigation, readline-style inline editing
+- Turbo Pascal IDE color scheme via exact CGA palette values
+- Multi-column sort with persistent ordering
+- Structured find/filter with SQL WHERE generation
+- Per-column find dialog with AND/OR toggles
+- Safety mode for destructive operations
+- External editor and pager integration
+- East Asian wide-character display support
+- Optional C extension for Unicode display-width acceleration
+- bs3 command alias

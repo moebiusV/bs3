@@ -1,0 +1,4 @@
+bin/browse-sqlite3
+bin/bs3
+man/man1/browse-sqlite3.1.gz
+man/man1/bs3.1.gz
