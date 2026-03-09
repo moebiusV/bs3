@@ -6,7 +6,7 @@
 #include <ncursesw/curses.h>
 #include "db.h"
 
-typedef enum { VIEW_TABLES, VIEW_ROWS, VIEW_EDIT } View;
+typedef enum { VIEW_TABLES, VIEW_ROWS, VIEW_FIELDS } View;
 
 /* Color pair indices */
 enum {
@@ -121,6 +121,12 @@ void browser_free_table_data(Browser *b);
 
 /* Cache formatted row strings */
 void browser_cache_row_strings(Browser *b);
+
+/* Apply saved column order to current_columns and rebuild row data */
+void browser_apply_column_order(Browser *b);
+
+/* Populate edit_values/edit_original from current sel_row */
+void browser_populate_edit(Browser *b);
 
 /* Set a status message (takes ownership of msg if heap-allocated) */
 void browser_set_message(Browser *b, const char *msg);

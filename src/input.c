@@ -151,17 +151,10 @@ void input_handle_rows(Browser *b, int key, int height)
     case '\n': case KEY_ENTER: case 'l': case KEY_RIGHT:
         if (count > 0) {
             /* Enter edit view */
-            b->current_view = VIEW_EDIT;
+            b->current_view = VIEW_FIELDS;
             b->sel_field = 0;
             b->field_scroll = 0;
-            /* Copy current row values for editing */
-            Row *r = &b->rowset.rows[b->sel_row];
-            b->edit_values = xcalloc((size_t)b->ncols, sizeof(char *));
-            b->edit_original = xcalloc((size_t)b->ncols, sizeof(char *));
-            for (int i = 0; i < b->ncols; i++) {
-                b->edit_values[i] = r->values[i] ? xstrdup(r->values[i]) : NULL;
-                b->edit_original[i] = r->values[i] ? xstrdup(r->values[i]) : NULL;
-            }
+            browser_populate_edit(b);
         }
         break;
     case KEY_BACKSPACE: case 127: case 'h': case KEY_LEFT:
@@ -236,7 +229,7 @@ void input_handle_rows(Browser *b, int key, int height)
 
 /* --- Edit view --- */
 
-void input_handle_edit(Browser *b, WINDOW *w, int key, int height, int width)
+void input_handle_fields(Browser *b, WINDOW *w, int key, int height, int width)
 {
     int visible = height - 3;
     if (visible <= 0) return;

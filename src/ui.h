@@ -18,7 +18,7 @@ void ui_safe_addstr_full(WINDOW *w, int y, int x, const char *s, int attr, int w
 /* Main view drawing */
 void ui_draw_tables_view(Browser *b, WINDOW *w, int height, int width);
 void ui_draw_rows_view(Browser *b, WINDOW *w, int height, int width);
-void ui_draw_edit_view(Browser *b, WINDOW *w, int height, int width);
+void ui_draw_fields_view(Browser *b, WINDOW *w, int height, int width);
 
 /* Overlays */
 void ui_draw_status_bar(Browser *b, WINDOW *w, int height, int width);

@@ -58,7 +58,6 @@ void browser_free_table_data(Browser *b)
     }
     free(b->current_table);
     b->current_table = NULL;
-    b->ncols = 0;
     if (b->edit_values) {
         for (int i = 0; i < b->ncols; i++) free(b->edit_values[i]);
         free(b->edit_values);
@@ -69,10 +68,15 @@ void browser_free_table_data(Browser *b)
         free(b->edit_original);
         b->edit_original = NULL;
     }
+    b->ncols = 0;
 }
 
 void browser_load_table(Browser *b, const char *table_name)
 {
+    /* Copy table_name early — caller may pass b->current_table which
+     * gets freed below (use-after-free if we defer the strdup). */
+    char *name_copy = xstrdup(table_name);
+
     /* Free previous data but save ncols for edit cleanup */
     int old_ncols = b->ncols;
     if (b->edit_values) {
@@ -99,11 +103,12 @@ void browser_load_table(Browser *b, const char *table_name)
     }
     free(b->current_table);
 
-    b->current_table = xstrdup(table_name);
+    b->current_table = name_copy;
+    /* From here on, use b->current_table — table_name may be dangling */
 
     /* Find table info to get columns */
     for (int i = 0; i < b->ntables; i++) {
-        if (strcmp(b->tables[i].name, table_name) == 0) {
+        if (strcmp(b->tables[i].name, b->current_table) == 0) {
             b->ncols = b->tables[i].ncols;
             b->current_columns = xcalloc((size_t)b->ncols, sizeof(char *));
             for (int j = 0; j < b->ncols; j++)
@@ -127,14 +132,14 @@ void browser_load_table(Browser *b, const char *table_name)
         browser_parse_find_pattern(b, b->find_filter);
 
     /* Get unfiltered count */
-    b->unfilt_row_count = db_row_count(b->db, table_name, NULL, NULL, 0);
+    b->unfilt_row_count = db_row_count(b->db, b->current_table, NULL, NULL, 0);
 
     /* Build ORDER BY from saved sort config */
     char *order_by = NULL;
     {
         Buf key;
         buf_init(&key);
-        buf_printf(&key, "row_sort:%s", table_name);
+        buf_printf(&key, "row_sort:%s", b->current_table);
         char *json = db_load_config(b->db, key.data);
         buf_free(&key);
         if (json && json[0] == '[') {
@@ -185,7 +190,7 @@ void browser_load_table(Browser *b, const char *table_name)
     }
 
     /* Load rows */
-    db_load_rows(b->db, table_name,
+    db_load_rows(b->db, b->current_table,
                  (const char **)b->current_columns, b->ncols,
                  b->find_where,
                  (const char **)b->find_params, b->nfind_params,
@@ -194,6 +199,9 @@ void browser_load_table(Browser *b, const char *table_name)
     free(order_by);
 
     browser_cache_row_strings(b);
+
+    /* Apply saved column display order if any */
+    browser_apply_column_order(b);
 }
 
 void browser_cache_row_strings(Browser *b)
@@ -223,6 +231,120 @@ void browser_cache_row_strings(Browser *b)
             }
         }
         b->row_strings[i] = buf_detach(&line);
+    }
+}
+
+void browser_apply_column_order(Browser *b)
+{
+    if (!b->current_table || b->ncols <= 0) return;
+
+    /* Load saved column order */
+    Buf key;
+    buf_init(&key);
+    buf_printf(&key, "column_order:%s", b->current_table);
+    char *json = db_load_config(b->db, key.data);
+    buf_free(&key);
+    if (!json || json[0] != '[') {
+        free(json);
+        return;
+    }
+
+    /* Parse ["col1","col2",...] */
+    Vec names;
+    vec_init(&names);
+    const char *p = json + 1;
+    while (*p) {
+        if (*p == '"') {
+            p++;
+            const char *start = p;
+            while (*p && *p != '"') p++;
+            vec_push(&names, xstrndup(start, (size_t)(p - start)));
+            if (*p == '"') p++;
+        } else {
+            p++;
+        }
+    }
+    free(json);
+
+    /* Build permutation: perm[new_idx] = old_idx */
+    int *perm = xcalloc((size_t)b->ncols, sizeof(int));
+    int valid = 1;
+    int used_count = 0;
+    for (int i = 0; i < b->ncols; i++) perm[i] = -1;
+
+    for (int i = 0; i < (int)names.len && i < b->ncols; i++) {
+        int found = -1;
+        for (int j = 0; j < b->ncols; j++) {
+            if (strcmp(b->current_columns[j], names.items[i]) == 0) {
+                int dup = 0;
+                for (int k = 0; k < i; k++)
+                    if (perm[k] == j) { dup = 1; break; }
+                if (!dup) { found = j; break; }
+            }
+        }
+        if (found >= 0) {
+            perm[i] = found;
+            used_count++;
+        } else {
+            valid = 0;
+            break;
+        }
+    }
+
+    /* Must have exactly all columns */
+    if (!valid || used_count != b->ncols || (int)names.len != b->ncols) {
+        free(perm);
+        for (size_t i = 0; i < names.len; i++) free(names.items[i]);
+        vec_free(&names);
+        return;
+    }
+    for (size_t i = 0; i < names.len; i++) free(names.items[i]);
+    vec_free(&names);
+
+    /* Apply permutation to current_columns */
+    char **new_cols = xcalloc((size_t)b->ncols, sizeof(char *));
+    for (int i = 0; i < b->ncols; i++)
+        new_cols[i] = b->current_columns[perm[i]];
+    memcpy(b->current_columns, new_cols, (size_t)b->ncols * sizeof(char *));
+    free(new_cols);
+
+    /* Apply permutation to each row's values */
+    for (int r = 0; r < b->rowset.nrows; r++) {
+        Row *row = &b->rowset.rows[r];
+        char **new_vals = xcalloc((size_t)b->ncols, sizeof(char *));
+        for (int i = 0; i < b->ncols; i++)
+            new_vals[i] = row->values[perm[i]];
+        memcpy(row->values, new_vals, (size_t)b->ncols * sizeof(char *));
+        free(new_vals);
+    }
+
+    free(perm);
+
+    /* Rebuild row_strings with new column order */
+    browser_cache_row_strings(b);
+}
+
+void browser_populate_edit(Browser *b)
+{
+    /* Free old edit state */
+    if (b->edit_values) {
+        for (int i = 0; i < b->ncols; i++) free(b->edit_values[i]);
+        free(b->edit_values);
+        b->edit_values = NULL;
+    }
+    if (b->edit_original) {
+        for (int i = 0; i < b->ncols; i++) free(b->edit_original[i]);
+        free(b->edit_original);
+        b->edit_original = NULL;
+    }
+    if (b->sel_row < 0 || b->sel_row >= b->rowset.nrows || b->ncols <= 0)
+        return;
+    Row *r = &b->rowset.rows[b->sel_row];
+    b->edit_values = xcalloc((size_t)b->ncols, sizeof(char *));
+    b->edit_original = xcalloc((size_t)b->ncols, sizeof(char *));
+    for (int i = 0; i < b->ncols; i++) {
+        b->edit_values[i] = r->values[i] ? xstrdup(r->values[i]) : NULL;
+        b->edit_original[i] = r->values[i] ? xstrdup(r->values[i]) : NULL;
     }
 }
 
@@ -292,7 +414,7 @@ void browser_run(Browser *b, WINDOW *stdscr)
             else if (b->current_view == VIEW_ROWS)
                 ui_draw_rows_view(b, stdscr, height, width);
             else
-                ui_draw_edit_view(b, stdscr, height, width);
+                ui_draw_fields_view(b, stdscr, height, width);
 
             if (b->find_mode)
                 ui_draw_find_bar(b, stdscr, height, width);
@@ -405,7 +527,7 @@ void browser_run(Browser *b, WINDOW *stdscr)
         else if (b->current_view == VIEW_ROWS)
             input_handle_rows(b, key, height);
         else
-            input_handle_edit(b, stdscr, key, height, width);
+            input_handle_fields(b, stdscr, key, height, width);
 
         if ((int)b->current_view != old_view)
             full_redraw = 1;
@@ -521,7 +643,7 @@ void browser_open_sort(Browser *b)
             vec_free(&dirs);
         }
         free(json);
-    } else { /* VIEW_EDIT */
+    } else { /* VIEW_FIELDS */
         b->sort_context = 'c';
         b->nsort_items = b->ncols;
         b->sort_items = xcalloc((size_t)b->ncols, sizeof(char *));
@@ -559,10 +681,33 @@ void browser_apply_sort(Browser *b)
         b->table_display_order = xcalloc((size_t)b->nsort_items, sizeof(char *));
         for (int i = 0; i < b->nsort_items; i++)
             b->table_display_order[i] = xstrdup(b->sort_items[i]);
-        /* Reload tables */
+        /* Reload tables and reorder according to display_order */
         db_free_tables(b->tables, b->ntables);
         b->tables = db_get_tables(b->db, &b->ntables);
-        /* TODO: reorder tables according to display_order */
+        if (b->table_display_order && b->ntable_order > 0) {
+            TableInfo *reordered = xcalloc((size_t)b->ntables, sizeof(TableInfo));
+            int *used = xcalloc((size_t)b->ntables, sizeof(int));
+            int pos = 0;
+            /* Place tables in saved order first */
+            for (int i = 0; i < b->ntable_order; i++) {
+                for (int j = 0; j < b->ntables; j++) {
+                    if (!used[j] && strcmp(b->tables[j].name, b->table_display_order[i]) == 0) {
+                        reordered[pos++] = b->tables[j];
+                        used[j] = 1;
+                        break;
+                    }
+                }
+            }
+            /* Append any tables not in the saved order */
+            for (int j = 0; j < b->ntables; j++) {
+                if (!used[j])
+                    reordered[pos++] = b->tables[j];
+            }
+            /* Shallow-copy back (TableInfo structs own their strings) */
+            memcpy(b->tables, reordered, (size_t)b->ntables * sizeof(TableInfo));
+            free(reordered);
+            free(used);
+        }
     } else if (b->sort_context == 'c') {
         /* Save column order */
         Buf key, json;
@@ -578,7 +723,10 @@ void browser_apply_sort(Browser *b)
         db_save_config(b->db, key.data, json.data);
         buf_free(&key);
         buf_free(&json);
-        browser_load_table(b, b->current_table);
+        /* Apply new column order without full reload (preserves edit state and find filter) */
+        browser_apply_column_order(b);
+        if (b->current_view == VIEW_FIELDS)
+            browser_populate_edit(b);
     } else if (b->sort_context == 'r') {
         /* Save row sort config */
         Buf key, json;
@@ -628,6 +776,8 @@ void browser_reset_sort(Browser *b)
         db_save_config(b->db, key.data, "null");
         buf_free(&key);
         browser_load_table(b, b->current_table);
+        if (b->current_view == VIEW_FIELDS)
+            browser_populate_edit(b);
         for (int i = 0; i < b->nsort_items; i++) free(b->sort_items[i]);
         free(b->sort_items);
         b->nsort_items = b->ncols;
@@ -914,6 +1064,29 @@ void browser_load_config(Browser *b)
         for (size_t i = 0; i < names.len; i++)
             b->table_display_order[i] = names.items[i];
         vec_free(&names);
+
+        /* Reorder tables array to match saved order */
+        if (b->ntables > 0) {
+            TableInfo *reordered = xcalloc((size_t)b->ntables, sizeof(TableInfo));
+            int *used = xcalloc((size_t)b->ntables, sizeof(int));
+            int pos = 0;
+            for (int i = 0; i < b->ntable_order; i++) {
+                for (int j = 0; j < b->ntables; j++) {
+                    if (!used[j] && strcmp(b->tables[j].name, b->table_display_order[i]) == 0) {
+                        reordered[pos++] = b->tables[j];
+                        used[j] = 1;
+                        break;
+                    }
+                }
+            }
+            for (int j = 0; j < b->ntables; j++) {
+                if (!used[j])
+                    reordered[pos++] = b->tables[j];
+            }
+            memcpy(b->tables, reordered, (size_t)b->ntables * sizeof(TableInfo));
+            free(reordered);
+            free(used);
+        }
     }
     free(json);
 }

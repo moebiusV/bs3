@@ -9,7 +9,7 @@
 /* Per-view input handlers */
 void input_handle_tables(Browser *b, int key, int height);
 void input_handle_rows(Browser *b, int key, int height);
-void input_handle_edit(Browser *b, WINDOW *w, int key, int height, int width);
+void input_handle_fields(Browser *b, WINDOW *w, int key, int height, int width);
 
 /* Modal input handlers */
 void input_handle_command(Browser *b, int key);

@@ -84,13 +84,16 @@ void ui_safe_addstr_full(WINDOW *w, int y, int x, const char *s, int attr, int w
     char *trunc = str_truncate_to_width(s, width);
     wattron(w, attr);
     mvaddstr(y, x, trunc);
-    /* Pad to full width using getyx */
+    /* Pad to full width using getyx.
+     * If cursor wrapped past line y (string filled/overflowed the width),
+     * the line is already full — skip padding to avoid corrupting line y+1. */
     int cy, cx;
     getyx(w, cy, cx);
-    (void)cy;
-    while (cx < x + width && cx < maxx) {
-        addch(' ');
-        cx++;
+    if (cy == y) {
+        while (cx < x + width && cx < maxx) {
+            addch(' ');
+            cx++;
+        }
     }
     wattroff(w, attr);
     free(trunc);
@@ -214,7 +217,7 @@ void ui_draw_rows_view(Browser *b, WINDOW *w, int height, int width)
 
 /* --- Edit view --- */
 
-void ui_draw_edit_view(Browser *b, WINDOW *w, int height, int width)
+void ui_draw_fields_view(Browser *b, WINDOW *w, int height, int width)
 {
     draw_title_bar(b, w, width);
 
