@@ -12,10 +12,13 @@ SLOT="0"
 KEYWORDS="~amd64 ~x86"
 
 BDEPEND="virtual/pkgconfig"
-RDEPEND="sys-libs/ncurses:="
+RDEPEND="
+	sys-libs/ncurses:=
+	dev-db/sqlite:3
+"
 
 src_configure() {
-	./configure --prefix=/usr
+	./configure --prefix=/usr --with-system-sqlite
 }
 
 src_compile() {

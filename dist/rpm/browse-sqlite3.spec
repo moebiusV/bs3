@@ -8,6 +8,7 @@ Source0:        %{name}-%{version}.tar.gz
 
 BuildRequires:  gcc
 BuildRequires:  ncurses-devel
+BuildRequires:  sqlite-devel
 BuildRequires:  pkgconfig
 
 %description
@@ -19,7 +20,7 @@ structured search, and a Turbo Pascal-inspired CGA color scheme.
 %setup -q
 
 %build
-./configure --prefix=%{_prefix} --bindir=%{_bindir} --mandir=%{_mandir}
+./configure --prefix=%{_prefix} --bindir=%{_bindir} --mandir=%{_mandir} --with-system-sqlite
 make %{?_smp_mflags}
 
 %check

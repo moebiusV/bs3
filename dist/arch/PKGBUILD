@@ -6,14 +6,14 @@ pkgdesc="Interactive terminal browser for SQLite databases"
 arch=('x86_64')
 url="https://github.com/moebiusV/bs3"
 license=('BSD-2-Clause')
-depends=('ncurses')
-makedepends=('gcc')
+depends=('ncurses' 'sqlite')
+makedepends=('gcc' 'pkgconf')
 source=("$pkgname-$pkgver.tar.gz")
 sha256sums=('SKIP')
 
 build() {
     cd "$pkgname-$pkgver"
-    ./configure --prefix=/usr
+    ./configure --prefix=/usr --with-system-sqlite
     make
 }
 

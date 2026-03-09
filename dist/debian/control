@@ -2,9 +2,10 @@ Source: browse-sqlite3
 Section: database
 Priority: optional
 Maintainer: MAINTAINER_NAME <MAINTAINER_EMAIL>
-Build-Depends: debhelper-compat (= 13), gcc, libncursesw5-dev, pkg-config
-Standards-Version: 4.6.2
+Build-Depends: debhelper-compat (= 13), gcc, libncursesw5-dev, libsqlite3-dev, pkg-config
+Standards-Version: 4.7.0
 Homepage: https://github.com/moebiusV/bs3
+Rules-Requires-Root: no
 
 Package: browse-sqlite3
 Architecture: any

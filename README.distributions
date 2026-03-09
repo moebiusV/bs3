@@ -11,10 +11,9 @@ What browse-sqlite3 Is
 ----------------------
 
 browse-sqlite3 is a full-screen TUI browser for SQLite databases,
-written in Python.  It provides table browsing, row navigation, and
-field editing with vi-style keybindings and a Turbo Pascal-inspired
-color scheme.  An optional C extension accelerates Unicode display-width
-calculations.
+written in C with statically bundled SQLite and ncurses support.
+It provides table browsing, row navigation, and field editing with
+vi-style keybindings and a Turbo Pascal-inspired color scheme.
 
 Also installs a bs3 symlink as a short alias.
 
@@ -22,21 +21,41 @@ Dependencies
 ------------
 
 Build-time:
-  - Python 3.6+ with sqlite3 and curses modules
-  - A C compiler (gcc, clang) for the optional _displaywidth extension
-  - Python development headers (python3-dev / python3-devel) for the
-    C extension
+  - C17 compiler (gcc, clang)
+  - ncurses wide-character development headers (libncursesw5-dev,
+    ncurses-devel, or equivalent)
+  - SQLite 3 development headers (libsqlite3-dev, sqlite-devel) OR
+    the bundled amalgamation in lib/sqlite3.c
 
 Runtime:
-  - Python 3.6+ with sqlite3 and curses modules
+  - ncurses wide-character library (libncursesw)
+  - SQLite 3 shared library (if built with --with-system-sqlite)
+
+SQLite Bundling Policy
+----------------------
+
+The configure script prefers system libsqlite3 when available,
+falling back to the bundled amalgamation (lib/sqlite3.c) only if
+the system library is not found.  Distribution packages should
+always use the system library:
+
+  ./configure --with-system-sqlite
+
+The --with-system-sqlite flag causes configure to error out if
+libsqlite3 is not found, rather than falling back to the bundled
+copy.  This ensures distro packages link against the system SQLite,
+which receives security updates through the distro's own channels.
+
+The bundled amalgamation exists for standalone builds on systems
+where libsqlite3-dev is not installed.
 
 How the Build Works
 -------------------
 
-1. ./configure detects Python, checks for sqlite3 and curses modules,
-   and generates a Makefile from Makefile.in.
-2. make compiles the optional C extension.
-3. make install copies the script, C extension, manpage, and symlinks.
+1. ./configure detects the C compiler, ncurses, and SQLite, then
+   generates a Makefile from Makefile.in.
+2. make compiles the C sources and links the binary.
+3. make install copies the binary, symlink, and manpage.
 
 The configure script is hand-written POSIX shell -- no autoconf or
 automake is required.  The build is simple enough that distro-specific
@@ -46,14 +65,10 @@ directly.
 What Gets Installed
 -------------------
 
-  $bindir/browse-sqlite3       Main program (Python script)
+  $bindir/browse-sqlite3       Main binary
   $bindir/bs3                  Symlink to browse-sqlite3
   $mandir/man1/browse-sqlite3.1   Manpage
   $mandir/man1/bs3.1           Symlink to browse-sqlite3.1
-
-The C extension (_displaywidth*.so) is loaded from the script's
-directory or Python's import path at runtime.  If not found, the
-program falls back to pure Python.
 
 License
 -------
@@ -82,6 +97,11 @@ Debian / Ubuntu
 ---------------
 
   Files:  dist/debian/
+
+  The packaging uses --with-system-sqlite to link against the
+  system libsqlite3, as required by Debian policy 4.13 (no
+  embedded copies of system libraries).  Hardening flags are
+  applied via dpkg-buildflags.
 
   Customize:
     - debian/changelog -- add your name, email, date, version

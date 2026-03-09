@@ -1,4 +1,4 @@
-{ lib, stdenv, ncurses, pkg-config, fetchFromGitHub }:
+{ lib, stdenv, ncurses, sqlite, pkg-config, fetchFromGitHub }:
 
 stdenv.mkDerivation rec {
   pname = "browse-sqlite3";
@@ -11,11 +11,11 @@ stdenv.mkDerivation rec {
     sha256 = lib.fakeSha256;
   };
 
-  buildInputs = [ ncurses ];
+  buildInputs = [ ncurses sqlite ];
   nativeBuildInputs = [ pkg-config ];
 
   configurePhase = ''
-    ./configure --prefix=$out
+    ./configure --prefix=$out --with-system-sqlite
   '';
 
   buildPhase = "make";
