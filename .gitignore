@@ -1,7 +1,7 @@
 __pycache__/
 *.so
 *.o
-Makefile
+/Makefile
 venv/
 browse-sqlite3-*.tar.gz
 bs3
