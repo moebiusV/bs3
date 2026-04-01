@@ -1,3 +1,14 @@
+browse-sqlite3 1.1 (2026-04-01)
+--------------------------------
+- Clipboard integration in field editor: ^C copy, ^V paste, ^X cut
+  - Auto-detects WSL (clip.exe/powershell.exe), macOS (pbcopy/pbpaste),
+    Wayland (wl-copy/wl-paste), and X11 (xclip)
+  - Safe mode prompts before ^V/^X replace field content
+- ^C no longer quits; use q or Esc
+- l/Right now opens field in pager (consistent with other views)
+- Fix: popen() wrapped in def_prog_mode()/reset_prog_mode() to prevent
+  static ncurses stack-smashing false positive on fork
+
 browse-sqlite3 1.0 (2026-02-21)
 --------------------------------
 - Initial release

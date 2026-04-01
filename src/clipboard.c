@@ -4,6 +4,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <ncursesw/curses.h>
 
 /* ── Platform detection ── */
 
@@ -69,55 +70,49 @@ const char *clipboard_platform_name(ClipPlatform p)
 int clipboard_copy(const char *text)
 {
     if (!text) text = "";
-    FILE *fp = NULL;
+    const char *cmd = NULL;
 
     switch (clipboard_platform()) {
-    case CLIP_WSL:
-        fp = popen("clip.exe", "w");
-        break;
-    case CLIP_MACOS:
-        fp = popen("pbcopy", "w");
-        break;
-    case CLIP_WAYLAND:
-        fp = popen("wl-copy", "w");
-        break;
-    case CLIP_X11:
-        fp = popen("xclip -selection clipboard", "w");
-        break;
-    case CLIP_NONE:
-        return 0;
+    case CLIP_WSL:     cmd = "clip.exe";                    break;
+    case CLIP_MACOS:   cmd = "pbcopy";                      break;
+    case CLIP_WAYLAND: cmd = "wl-copy";                     break;
+    case CLIP_X11:     cmd = "xclip -selection clipboard";  break;
+    case CLIP_NONE:    return 0;
     }
 
-    if (!fp) return 0;
-    fputs(text, fp);
-    return pclose(fp) == 0 ? 1 : 0;
+    def_prog_mode();
+    endwin();
+    FILE *fp = popen(cmd, "w");
+    int ok = 0;
+    if (fp) {
+        fputs(text, fp);
+        ok = pclose(fp) == 0;
+    }
+    reset_prog_mode();
+    return ok;
 }
 
 /* ── Paste ── */
 
 char *clipboard_paste(void)
 {
-    FILE *fp = NULL;
+    const char *cmd = NULL;
 
     switch (clipboard_platform()) {
     case CLIP_WSL:
         /* powershell outputs UTF-16 by default; -encoding utf8 gives plain bytes */
-        fp = popen("powershell.exe -command \"[Console]::OutputEncoding=[System.Text.Encoding]::UTF8; Get-Clipboard\"", "r");
+        cmd = "powershell.exe -command \"[Console]::OutputEncoding=[System.Text.Encoding]::UTF8; Get-Clipboard\"";
         break;
-    case CLIP_MACOS:
-        fp = popen("pbpaste", "r");
-        break;
-    case CLIP_WAYLAND:
-        fp = popen("wl-paste --no-newline", "r");
-        break;
-    case CLIP_X11:
-        fp = popen("xclip -selection clipboard -o", "r");
-        break;
-    case CLIP_NONE:
-        return NULL;
+    case CLIP_MACOS:   cmd = "pbpaste";                          break;
+    case CLIP_WAYLAND: cmd = "wl-paste --no-newline";            break;
+    case CLIP_X11:     cmd = "xclip -selection clipboard -o";    break;
+    case CLIP_NONE:    return NULL;
     }
 
-    if (!fp) return NULL;
+    def_prog_mode();
+    endwin();
+    FILE *fp = popen(cmd, "r");
+    if (!fp) { reset_prog_mode(); return NULL; }
 
     /* Read all output into a heap buffer. */
     size_t cap = 4096, len = 0;
@@ -135,6 +130,7 @@ char *clipboard_paste(void)
         }
     }
     pclose(fp);
+    reset_prog_mode();
     buf[len] = '\0';
 
     /* powershell.exe appends \r\n; strip a single trailing \r\n if present */
