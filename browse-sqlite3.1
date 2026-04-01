@@ -150,11 +150,8 @@ Page up through fields
 .B Tab
 Next field
 .TP
-.BR Enter " / " v
+.BR Enter " / " l " / " Right
 View field contents in pager
-.TP
-.BR l " / " Right
-View in pager (only when field is truncated)
 .TP
 .B e
 Edit field with the inline editor
@@ -167,6 +164,15 @@ Go back to row browser (prompts if unsaved changes)
 .TP
 .BR d " / " Del
 Set field to NULL (respects safety mode)
+.TP
+.B ^C
+Copy field value to system clipboard
+.TP
+.B ^V
+Paste clipboard contents into field (replaces current value; respects safety mode)
+.TP
+.B ^X
+Cut field: copy value to clipboard then set field to NULL (respects safety mode)
 .TP
 .B s
 Save all changes to database
@@ -229,16 +235,10 @@ Save changes and advance to next field
 .TP
 .BR Esc " / " ^G
 Abort edit, discarding changes to this field
-.TP
-.B ^C
-Quit program immediately
 .SH GLOBAL KEYS
 These keys work in all views (except during inline editing):
 .TP
 .BR q " / " Esc
-Quit program without saving
-.TP
-.B ^C
 Quit program without saving
 .TP
 .B F1
@@ -393,6 +393,24 @@ history model used by
 .BR bash (1)
 and
 .BR ftp (1).
+.SH CLIPBOARD
+The
+.BR ^C ,
+.BR ^V ,
+and
+.B ^X
+keys in the field editor integrate with the system clipboard.
+The clipboard backend is selected automatically at startup:
+.BR clip.exe / powershell.exe
+on WSL,
+.BR pbcopy / pbpaste
+on macOS,
+.BR wl-copy / wl-paste
+on Wayland, and
+.BR xclip
+on X11.
+If no supported backend is detected, clipboard operations report an error
+and are otherwise ignored.
 .SH ENVIRONMENT
 .TP
 .B EDITOR

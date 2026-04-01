@@ -308,7 +308,7 @@ void ui_draw_status_bar(Browser *b, WINDOW *w, int height, int width)
         buf_printf(&bar, " %s | hjkl:Nav | JK/PgDn | Tab:> | l:Edit | d:Del | h:Back | o:Sort | /:Search | f:Find | q:Quit | F1:Help ",
                    mode_str);
     } else {
-        buf_printf(&bar, " %s | hjkl:Nav | JK/PgDn | Tab:> | e:Edit | E:Ext | s:Save | h:Back | o:Order | /:Search | q:Quit | F1:Help ",
+        buf_printf(&bar, " %s | hjkl:Nav | JK/PgDn | Tab:> | e:Edit | E:Ext | s:Save | h:Back | ^C:Copy | ^V:Paste | ^X:Cut | o:Order | q:Quit | F1:Help ",
                    mode_str);
     }
 
@@ -427,10 +427,14 @@ void ui_draw_help_overlay(Browser *b, WINDOW *w, int height, int width)
         HL("K / PgUp", "Page up through fields");
         HL("J / PgDn", "Page down through fields");
         HL("Tab", "Next field");
-        HL("Enter / v", "View field in pager ($PAGER)");
+        HL("Enter / l", "View field in pager ($PAGER)");
         HL("E", "Edit in external editor ($EDITOR)");
         HL("d / Del", "Set field to NULL");
         HL("", "  SAFE: prompts | UNSAFE: immediate");
+        HL("^C", "Copy field to clipboard");
+        HL("^V", "Paste clipboard into field");
+        HL("^X", "Cut field (copy + set NULL)");
+        HL("", "  SAFE: ^V/^X prompt before replacing");
         HL("s", "Save all changes to database");
         HL("o", "Set column display order");
     }
@@ -438,7 +442,6 @@ void ui_draw_help_overlay(Browser *b, WINDOW *w, int height, int width)
     HL("", "");
     HL("", "-- General (all screens) --");
     HL("q / Esc", "Quit program without saving");
-    HL("^C", "Quit program without saving");
     HL("F1", "Toggle this help screen");
     HL(":", "Enter command mode");
     HL("", "");

@@ -101,6 +101,10 @@ typedef struct Browser {
     char *message;
     int quit_flag;
 
+    /* Clipboard */
+    char *pending_paste;  /* held across safe-mode paste confirmation */
+    int pending_cut;      /* 1 if safe-mode confirmation is for a cut (copy+NULL) */
+
     /* Config cache */
     char **table_display_order;
     int ntable_order;

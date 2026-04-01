@@ -1,6 +1,7 @@
 /* SPDX-License-Identifier: BSD-2-Clause */
 /* Copyright (c) 2026 David Walther */
 #include "input.h"
+#include "clipboard.h"
 #include "ui.h"
 #include "uniwidth.h"
 #include "util.h"
@@ -229,6 +230,25 @@ void input_handle_rows(Browser *b, int key, int height)
 
 /* --- Edit view --- */
 
+/* Prompt action: apply pending_paste to the currently selected field. */
+static void input_do_paste(Browser *b)
+{
+    if (!b->pending_paste) return;
+    free(b->edit_values[b->sel_field]);
+    b->edit_values[b->sel_field] = b->pending_paste;
+    b->pending_paste = NULL;
+    browser_set_message(b, "Pasted.");
+}
+
+/* Prompt action: complete a cut by setting the field to NULL. */
+static void input_do_cut(Browser *b)
+{
+    b->pending_cut = 0;
+    free(b->edit_values[b->sel_field]);
+    b->edit_values[b->sel_field] = NULL;
+    browser_set_message(b, "Cut: field cleared (value copied).");
+}
+
 void input_handle_fields(Browser *b, WINDOW *w, int key, int height, int width)
 {
     int visible = height - 3;
@@ -321,7 +341,7 @@ void input_handle_fields(Browser *b, WINDOW *w, int key, int height, int width)
         }
         break;
     }
-    case 'v': case '\n': case KEY_ENTER:
+    case 'l': case KEY_RIGHT: case '\n': case KEY_ENTER:
         /* View in pager */
         if (b->edit_values[b->sel_field])
             input_view_in_pager(b->edit_values[b->sel_field]);
@@ -350,6 +370,63 @@ void input_handle_fields(Browser *b, WINDOW *w, int key, int height, int width)
         b->help_mode = !b->help_mode;
         b->help_scroll = 0;
         break;
+    case 3: { /* ^C — copy current field to clipboard */
+        const char *val = b->edit_values[b->sel_field];
+        if (clipboard_copy(val ? val : "")) {
+            browser_set_message(b, "Copied to clipboard.");
+        } else {
+            char msg[64];
+            snprintf(msg, sizeof(msg), "Copy failed (no %s clipboard)",
+                     clipboard_platform_name(clipboard_platform()));
+            browser_set_message(b, msg);
+        }
+        break;
+    }
+    case 22: { /* ^V — paste from clipboard into current field */
+        char *text = clipboard_paste();
+        if (!text) {
+            char msg[64];
+            snprintf(msg, sizeof(msg), "Paste failed (no %s clipboard)",
+                     clipboard_platform_name(clipboard_platform()));
+            browser_set_message(b, msg);
+            break;
+        }
+        if (!b->safe_mode) {
+            free(b->edit_values[b->sel_field]);
+            b->edit_values[b->sel_field] = text;
+            browser_set_message(b, "Pasted.");
+        } else {
+            free(b->pending_paste);
+            b->pending_paste = text;
+            b->prompt_mode = 1;
+            snprintf(b->prompt_text, sizeof(b->prompt_text),
+                     " Replace field with clipboard contents? (y/n) ");
+            b->prompt_action = input_do_paste;
+        }
+        break;
+    }
+    case 24: { /* ^X — cut: copy then set NULL */
+        const char *val = b->edit_values[b->sel_field];
+        if (!clipboard_copy(val ? val : "")) {
+            char msg[64];
+            snprintf(msg, sizeof(msg), "Cut failed (no %s clipboard)",
+                     clipboard_platform_name(clipboard_platform()));
+            browser_set_message(b, msg);
+            break;
+        }
+        if (!b->safe_mode) {
+            free(b->edit_values[b->sel_field]);
+            b->edit_values[b->sel_field] = NULL;
+            browser_set_message(b, "Cut: field cleared (value copied).");
+        } else {
+            b->pending_cut = 1;
+            b->prompt_mode = 1;
+            snprintf(b->prompt_text, sizeof(b->prompt_text),
+                     " Cut field (copy + set NULL)? (y/n) ");
+            b->prompt_action = input_do_cut;
+        }
+        break;
+    }
     case 'q': case 27:
         b->quit_flag = 1;
         break;
@@ -413,9 +490,6 @@ void input_handle_prompt(Browser *b, int key)
         b->prompt_mode = 0;
         b->prompt_action = NULL;
         browser_set_message(b, "Cancelled.");
-        break;
-    case 3: /* ^C */
-        b->quit_flag = 1;
         break;
     }
 }
@@ -501,7 +575,6 @@ void input_handle_sort(Browser *b, int key, int height)
 
     if (key == 'q') { b->quit_flag = 1; b->sort_mode = 0; return; }
     if (key == KEY_F(1)) { b->help_mode = 1; b->help_scroll = 0; return; }
-    if (key == 3) { b->quit_flag = 1; b->sort_mode = 0; return; }
     if (key == 27) { b->sort_mode = 0; return; }
 
     if (key == KEY_DOWN || key == 'j') {
@@ -645,10 +718,6 @@ void input_handle_find_dialog(Browser *b, int key)
     if (key == '\n' || key == KEY_ENTER) {
         browser_apply_find_dialog(b);
         browser_free_find_dialog(b);
-        return;
-    }
-    if (key == 3) { /* ^C */
-        b->quit_flag = 1;
         return;
     }
     if (key == 9) { /* Tab - next field */

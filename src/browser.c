@@ -28,6 +28,7 @@ void browser_destroy(Browser *b)
     browser_free_find_dialog(b);
     db_free_tables(b->tables, b->ntables);
     free(b->message);
+    free(b->pending_paste);
     free(b->find_where);
     if (b->find_params) {
         for (int i = 0; i < b->nfind_params; i++)
@@ -448,7 +449,7 @@ void browser_run(Browser *b, WINDOW *stdscr)
         /* --- Input with frame pacing --- */
         int key = getch();
         if (key == ERR) continue;
-        if (key == 3) { b->quit_flag = 1; continue; } /* ^C */
+        /* ^C is handled per-view (fields: copy; others: ignored) */
 
         /* Drain buffered navigation keys (30fps batching) */
         if (key == KEY_UP || key == KEY_DOWN || key == 'j' || key == 'k' ||
