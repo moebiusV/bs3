@@ -7,6 +7,7 @@
 #include "util.h"
 #include <string.h>
 #include <stdlib.h>
+#include <stdio.h>
 #include <unistd.h>
 #include <sys/wait.h>
 
@@ -62,6 +63,10 @@ void input_handle_tables(Browser *b, int key, int height)
         }
         break;
     case 'd': case KEY_DC:
+        if (count > 0 && b->tables[b->sel_table].is_view) {
+            browser_set_message(b, "Cannot drop a view.");
+            break;
+        }
         if (count > 0) {
             if (!b->safe_mode) {
                 char *name = xstrdup(b->tables[b->sel_table].name);
@@ -150,7 +155,9 @@ void input_handle_rows(Browser *b, int key, int height)
         b->row_scroll = b->sel_row;
         break;
     case '\n': case KEY_ENTER: case 'l': case KEY_RIGHT:
-        if (count > 0) {
+        if (b->current_is_view) {
+            browser_enter_drillthrough(b);
+        } else if (count > 0) {
             /* Enter edit view */
             b->current_view = VIEW_FIELDS;
             b->sel_field = 0;
@@ -173,6 +180,10 @@ void input_handle_rows(Browser *b, int key, int height)
         }
         break;
     case 'd': case KEY_DC:
+        if (b->current_is_view) {
+            browser_set_message(b, "View is read-only.");
+            break;
+        }
         if (count > 0) {
             if (!b->safe_mode) {
                 long long rowid = b->rowset.rows[b->sel_row].rowid;
@@ -222,6 +233,9 @@ void input_handle_rows(Browser *b, int key, int height)
         b->help_mode = !b->help_mode;
         b->help_scroll = 0;
         break;
+    case 'W':
+        browser_dump_screen(b);  /* dumps ncurses screen with color attrs to /tmp/bs3-NNNN-ts.txt */
+        break;
     case 'q': case 27:
         b->quit_flag = 1;
         break;
@@ -256,9 +270,11 @@ void input_handle_fields(Browser *b, WINDOW *w, int key, int height, int width)
     (void)w;
     (void)width;
 
+    int field_count = b->drillthrough_mode ? b->drillthrough_ncols : b->ncols;
+
     switch (key) {
     case 'j': case KEY_DOWN:
-        if (b->sel_field < b->ncols - 1) {
+        if (b->sel_field < field_count - 1) {
             b->sel_field++;
             if (b->sel_field >= b->field_scroll + visible)
                 b->field_scroll = b->sel_field - visible + 1;
@@ -273,7 +289,7 @@ void input_handle_fields(Browser *b, WINDOW *w, int key, int height, int width)
         break;
     case 'J': case KEY_NPAGE:
         b->sel_field += visible;
-        if (b->sel_field >= b->ncols) b->sel_field = b->ncols - 1;
+        if (b->sel_field >= field_count) b->sel_field = field_count - 1;
         b->field_scroll = b->sel_field - visible + 1;
         if (b->field_scroll < 0) b->field_scroll = 0;
         break;
@@ -283,13 +299,17 @@ void input_handle_fields(Browser *b, WINDOW *w, int key, int height, int width)
         b->field_scroll = b->sel_field;
         break;
     case 9: /* Tab */
-        if (b->sel_field < b->ncols - 1) {
+        if (b->sel_field < field_count - 1) {
             b->sel_field++;
             if (b->sel_field >= b->field_scroll + visible)
                 b->field_scroll = b->sel_field - visible + 1;
         }
         break;
     case 's': {
+        if (b->drillthrough_mode || b->current_is_view) {
+            browser_set_message(b, "Read-only.");
+            break;
+        }
         /* Save changes */
         Row *r = &b->rowset.rows[b->sel_row];
         int rc = db_update_row(b->db, b->current_table,
@@ -317,9 +337,8 @@ void input_handle_fields(Browser *b, WINDOW *w, int key, int height, int width)
         break;
     }
     case KEY_BACKSPACE: case 127: case 'h': case KEY_LEFT:
-        /* Go back to rows view */
+        browser_free_drillthrough(b);
         b->current_view = VIEW_ROWS;
-        /* Free edit state */
         if (b->edit_values) {
             for (int i = 0; i < b->ncols; i++) free(b->edit_values[i]);
             free(b->edit_values);
@@ -332,7 +351,10 @@ void input_handle_fields(Browser *b, WINDOW *w, int key, int height, int width)
         }
         break;
     case 'E': {
-        /* External editor */
+        if (b->drillthrough_mode || b->current_is_view) {
+            browser_set_message(b, "Read-only.");
+            break;
+        }
         const char *val = b->edit_values[b->sel_field];
         char *newval = input_external_editor(val);
         if (newval) {
@@ -341,13 +363,19 @@ void input_handle_fields(Browser *b, WINDOW *w, int key, int height, int width)
         }
         break;
     }
-    case 'l': case KEY_RIGHT: case '\n': case KEY_ENTER:
-        /* View in pager */
-        if (b->edit_values[b->sel_field])
-            input_view_in_pager(b->edit_values[b->sel_field]);
+    case 'l': case KEY_RIGHT: case '\n': case KEY_ENTER: {
+        /* View current field in pager */
+        const char *val = b->drillthrough_mode
+            ? (b->drillthrough_vals ? b->drillthrough_vals[b->sel_field] : NULL)
+            : (b->edit_values      ? b->edit_values[b->sel_field]       : NULL);
+        if (val) input_view_in_pager(val);
         break;
+    }
     case 'd': case KEY_DC:
-        /* Set to NULL */
+        if (b->drillthrough_mode || b->current_is_view) {
+            browser_set_message(b, "Read-only.");
+            break;
+        }
         if (!b->safe_mode) {
             free(b->edit_values[b->sel_field]);
             b->edit_values[b->sel_field] = NULL;
@@ -359,6 +387,7 @@ void input_handle_fields(Browser *b, WINDOW *w, int key, int height, int width)
         }
         break;
     case 'o':
+        if (b->drillthrough_mode) break;
         browser_open_sort(b);
         break;
     case ':':
@@ -371,7 +400,9 @@ void input_handle_fields(Browser *b, WINDOW *w, int key, int height, int width)
         b->help_scroll = 0;
         break;
     case 3: { /* ^C — copy current field to clipboard */
-        const char *val = b->edit_values[b->sel_field];
+        const char *val = b->drillthrough_mode
+            ? (b->drillthrough_vals ? b->drillthrough_vals[b->sel_field] : NULL)
+            : (b->edit_values       ? b->edit_values[b->sel_field]       : NULL);
         if (clipboard_copy(val ? val : "")) {
             browser_set_message(b, "Copied to clipboard.");
         } else {
@@ -383,6 +414,7 @@ void input_handle_fields(Browser *b, WINDOW *w, int key, int height, int width)
         break;
     }
     case 22: { /* ^V — paste from clipboard into current field */
+        if (b->drillthrough_mode || b->current_is_view) { browser_set_message(b, "Read-only."); break; }
         char *text = clipboard_paste();
         if (!text) {
             char msg[64];
@@ -406,6 +438,7 @@ void input_handle_fields(Browser *b, WINDOW *w, int key, int height, int width)
         break;
     }
     case 24: { /* ^X — cut: copy then set NULL */
+        if (b->drillthrough_mode || b->current_is_view) { browser_set_message(b, "Read-only."); break; }
         const char *val = b->edit_values[b->sel_field];
         if (!clipboard_copy(val ? val : "")) {
             char msg[64];

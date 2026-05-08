@@ -38,17 +38,20 @@ TableInfo *db_get_tables(Database *d, int *count)
     *count = 0;
     sqlite3_stmt *stmt;
     int rc = sqlite3_prepare_v2(d->db,
-        "SELECT name FROM sqlite_master "
-        "WHERE type='table' AND name NOT LIKE 'sqlite_%' "
+        "SELECT name, type FROM sqlite_master "
+        "WHERE (type='table' OR type='view') AND name NOT LIKE 'sqlite_%' "
         "AND name != '_browse_config' ORDER BY name",
         -1, &stmt, NULL);
     if (rc != SQLITE_OK) return NULL;
 
-    Vec names;
+    Vec names, types;
     vec_init(&names);
+    vec_init(&types);
     while (sqlite3_step(stmt) == SQLITE_ROW) {
         const char *name = (const char *)sqlite3_column_text(stmt, 0);
+        const char *type = (const char *)sqlite3_column_text(stmt, 1);
         vec_push(&names, xstrdup(name));
+        vec_push(&types, xstrdup(type ? type : "table"));
     }
     sqlite3_finalize(stmt);
 
@@ -56,6 +59,8 @@ TableInfo *db_get_tables(Database *d, int *count)
     TableInfo *tables = xcalloc((size_t)n, sizeof(TableInfo));
     for (int i = 0; i < n; i++) {
         tables[i].name = names.items[i];
+        tables[i].is_view = (strcmp((char *)types.items[i], "view") == 0);
+        free(types.items[i]);
         /* Get columns via PRAGMA */
         Buf sql;
         buf_init(&sql);
@@ -79,6 +84,7 @@ TableInfo *db_get_tables(Database *d, int *count)
         vec_free(&cols);
     }
     vec_free(&names);
+    vec_free(&types);
 
     *count = n;
     return tables;
@@ -136,7 +142,7 @@ void db_free_string_array(char **arr, int count)
 
 void db_load_rows(Database *d, const char *table, const char **columns, int ncols,
                   const char *where_clause, const char **where_params, int nparams,
-                  const char *order_by, RowSet *out)
+                  const char *order_by, int is_view, RowSet *out)
 {
     out->rows = NULL;
     out->nrows = 0;
@@ -144,7 +150,8 @@ void db_load_rows(Database *d, const char *table, const char **columns, int ncol
 
     Buf sql;
     buf_init(&sql);
-    buf_append_str(&sql, "SELECT rowid");
+    /* Views don't have rowids; use 0 as a harmless placeholder. */
+    buf_append_str(&sql, is_view ? "SELECT 0" : "SELECT rowid");
     for (int i = 0; i < ncols; i++)
         buf_printf(&sql, ", \"%s\"", columns[i]);
     buf_printf(&sql, " FROM \"%s\"", table);
@@ -318,6 +325,46 @@ int db_save_config(Database *d, const char *key, const char *json_value)
     rc = sqlite3_step(stmt);
     sqlite3_finalize(stmt);
     return (rc == SQLITE_DONE) ? 0 : -1;
+}
+
+/* --- Drillthrough row fetch --- */
+
+int db_fetch_row_by_sql(Database *d, const char *sql, const char *bind_val,
+                        char ***cols_out, int *ncols_out, char ***vals_out)
+{
+    *cols_out = NULL;
+    *ncols_out = 0;
+    *vals_out = NULL;
+
+    sqlite3_stmt *stmt;
+    int rc = sqlite3_prepare_v2(d->db, sql, -1, &stmt, NULL);
+    if (rc != SQLITE_OK) return 0;
+    sqlite3_bind_text(stmt, 1, bind_val, -1, SQLITE_STATIC);
+
+    if (sqlite3_step(stmt) != SQLITE_ROW) {
+        sqlite3_finalize(stmt);
+        return 0;
+    }
+
+    int n = sqlite3_column_count(stmt);
+    char **cols = xcalloc((size_t)n, sizeof(char *));
+    char **vals = xcalloc((size_t)n, sizeof(char *));
+    for (int i = 0; i < n; i++) {
+        const char *cn = sqlite3_column_name(stmt, i);
+        cols[i] = xstrdup(cn ? cn : "");
+        if (sqlite3_column_type(stmt, i) == SQLITE_NULL)
+            vals[i] = NULL;
+        else {
+            const char *v = (const char *)sqlite3_column_text(stmt, i);
+            vals[i] = xstrdup(v ? v : "");
+        }
+    }
+    sqlite3_finalize(stmt);
+
+    *cols_out = cols;
+    *ncols_out = n;
+    *vals_out = vals;
+    return 1;
 }
 
 /* --- Read-only detection --- */

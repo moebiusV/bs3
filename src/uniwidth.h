@@ -5,13 +5,16 @@
 
 #include <wchar.h>
 
-/* Display width of a single Unicode codepoint.
- *
- * Uses wcwidth() as baseline, with overrides:
- *   - Emoji symbols (So category) at U+2600+ forced to 2
- *   - Variation selectors U+FE00-FE0F forced to 1
- *   - Control chars and invalid return 0
- */
+/* Set to 2 if the terminal renders EAW=Ambiguous characters as 2 columns.
+ * Call terminal_probe_eaw_width() before initscr() to detect automatically. */
+extern int g_eaw_ambiguous_width;
+
+/* Probe the terminal to detect EAW=Ambiguous rendering width (1 or 2).
+ * Must be called before initscr() — uses raw terminal I/O directly.
+ * Sets g_eaw_ambiguous_width and returns the detected value. */
+int terminal_probe_eaw_width(void);
+
+/* Display width of a single Unicode codepoint. */
 int char_display_width(wchar_t ch);
 
 /* Display width of a UTF-8 string */

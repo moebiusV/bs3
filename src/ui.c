@@ -63,10 +63,20 @@ void ui_safe_addstr(WINDOW *w, int y, int x, const char *s, int attr)
     (void)maxy;
     if (y < 0 || x < 0 || x >= maxx) return;
 
-    int avail = maxx - x;
+    /* Reserve the last TWO terminal columns.  With DECAWM (auto-margin) and
+     * the xenl ("newline glitch") flag, ncurses exploits "pending wrap" as a
+     * cursor-advance optimisation: when the cursor lands on column maxx-1
+     * after a write, ncurses may emit the first character of the next row
+     * without sending a CUP sequence, letting the terminal auto-wrap.  That
+     * auto-wrap fires wrapline() in Alacritty, permanently marking the row as
+     * "soft-wrapped" so copy-paste joins it with the next row.  Keeping
+     * content ≤ maxx-2 ensures the cursor never reaches column maxx-1, so
+     * ncurses is forced to use explicit cursor positioning instead. */
+    int avail = maxx - x - 2;
+    if (avail < 0) avail = 0;
     char *trunc = str_truncate_to_width(s, avail);
     wattron(w, attr);
-    mvaddstr(y, x, trunc);
+    mvwaddstr(w, y, x, trunc);
     wattroff(w, attr);
     free(trunc);
 }
@@ -78,23 +88,21 @@ void ui_safe_addstr_full(WINDOW *w, int y, int x, const char *s, int attr, int w
     (void)maxy;
     if (y < 0 || x < 0 || x >= maxx) return;
 
-    int avail = maxx - x;
+    int avail = maxx - x - 2;  /* see ui_safe_addstr comment */
+    if (avail < 0) avail = 0;
     if (width > avail) width = avail;
 
     char *trunc = str_truncate_to_width(s, width);
     wattron(w, attr);
-    mvaddstr(y, x, trunc);
-    /* Pad to full width using getyx.
-     * If cursor wrapped past line y (string filled/overflowed the width),
-     * the line is already full — skip padding to avoid corrupting line y+1. */
-    int cy, cx;
-    getyx(w, cy, cx);
-    if (cy == y) {
-        while (cx < x + width && cx < maxx) {
-            addch(' ');
-            cx++;
-        }
-    }
+    /* Clear the row from x to EOL before writing content.  wmove puts the
+     * cursor at a known position (no EAW drift), so wclrtoeol fills with the
+     * correct background colour.  If we cleared after mvwaddstr instead,
+     * ncurses' internal cursor could be K columns behind Alacritty's actual
+     * position (K = count of EAW=A chars that wcwidth() underestimates),
+     * leaving the old row's highlight colour visible in the trailing gap. */
+    wmove(w, y, x);
+    wclrtoeol(w);
+    mvwaddstr(w, y, x, trunc);
     wattroff(w, attr);
     free(trunc);
 }
@@ -111,8 +119,12 @@ static void draw_title_bar(Browser *b, WINDOW *w, int width)
         buf_printf(&title, " browse-sqlite3 -- %s -- %s (%d rows) ",
                    b->db->path, b->current_table, b->rowset.nrows);
     } else {
-        buf_printf(&title, " browse-sqlite3 -- %s -- %s -- Edit ",
-                   b->db->path, b->current_table);
+        if (b->drillthrough_mode && b->drillthrough_table)
+            buf_printf(&title, " browse-sqlite3 -- %s -- %s \xe2\x86\x92 %s (read-only) ",
+                       b->db->path, b->current_table, b->drillthrough_table);
+        else
+            buf_printf(&title, " browse-sqlite3 -- %s -- %s -- Edit ",
+                       b->db->path, b->current_table);
     }
     ui_safe_addstr_full(w, 0, 0, title.data, COLOR_PAIR(C_TITLE) | A_BOLD, width);
     buf_free(&title);
@@ -125,7 +137,7 @@ void ui_draw_tables_view(Browser *b, WINDOW *w, int height, int width)
     draw_title_bar(b, w, width);
 
     /* Header line (row 1) */
-    ui_safe_addstr_full(w, 1, 0, " Table Name             Columns",
+    ui_safe_addstr_full(w, 1, 0, "  V  Name                   Columns",
                         COLOR_PAIR(C_BRIGHT) | A_BOLD, width);
 
     int visible = height - 3; /* title + header + status bar */
@@ -145,10 +157,13 @@ void ui_draw_tables_view(Browser *b, WINDOW *w, int height, int width)
         int is_selected = (idx == b->sel_table);
         int attr = COLOR_PAIR(is_selected ? C_SELECTED : C_NORMAL);
 
-        /* Build line: marker + name + columns */
+        /* Build line: selection marker + type badge + name + columns */
         Buf line;
         buf_init(&line);
-        buf_printf(&line, " %s %-24s ", is_selected ? "\xe2\x96\xba" : " ", t->name);
+        buf_printf(&line, " %s%s %-23s ",
+                   is_selected ? "\xe2\x96\xba" : " ",
+                   t->is_view ? "V" : " ",
+                   t->name);
         buf_append_char(&line, '(');
         for (int j = 0; j < t->ncols; j++) {
             if (j > 0) buf_append_str(&line, ", ");
@@ -221,11 +236,18 @@ void ui_draw_fields_view(Browser *b, WINDOW *w, int height, int width)
 {
     draw_title_bar(b, w, width);
 
-    /* Header: row N of M */
+    int ncols   = b->drillthrough_mode ? b->drillthrough_ncols : b->ncols;
+    char **cols = b->drillthrough_mode ? b->drillthrough_cols  : b->current_columns;
+    char **vals = b->drillthrough_mode ? b->drillthrough_vals  : b->edit_values;
+
+    /* Header */
     {
         Buf hdr;
         buf_init(&hdr);
-        buf_printf(&hdr, " Row %d of %d", b->sel_row + 1, b->rowset.nrows);
+        if (b->drillthrough_mode)
+            buf_printf(&hdr, " Row %d of %d (drillthrough -- read-only)", b->sel_row + 1, b->rowset.nrows);
+        else
+            buf_printf(&hdr, " Row %d of %d", b->sel_row + 1, b->rowset.nrows);
         ui_safe_addstr_full(w, 1, 0, hdr.data, COLOR_PAIR(C_BRIGHT) | A_BOLD, width);
         buf_free(&hdr);
     }
@@ -235,17 +257,17 @@ void ui_draw_fields_view(Browser *b, WINDOW *w, int height, int width)
 
     /* Find max column name width for alignment */
     int max_name_w = 0;
-    for (int i = 0; i < b->ncols; i++) {
-        int nw = str_display_width(b->current_columns[i]);
+    for (int i = 0; i < ncols; i++) {
+        int nw = str_display_width(cols[i]);
         if (nw > max_name_w) max_name_w = nw;
     }
-    int label_w = max_name_w + 4; /* padding + ": " */
+    int label_w = max_name_w + 4;
     if (label_w > width / 3) label_w = width / 3;
 
     for (int i = 0; i < visible; i++) {
         int idx = b->field_scroll + i;
         int row_y = 2 + i;
-        if (idx >= b->ncols) {
+        if (idx >= ncols) {
             ui_safe_addstr_full(w, row_y, 0, "", COLOR_PAIR(C_NORMAL), width);
             continue;
         }
@@ -253,10 +275,10 @@ void ui_draw_fields_view(Browser *b, WINDOW *w, int height, int width)
         int is_selected = (idx == b->sel_field);
         int attr = COLOR_PAIR(is_selected ? C_SELECTED : C_NORMAL);
 
-        /* Check for modifications */
+        /* Modification marker only in edit mode */
         int modified = 0;
-        if (b->edit_values && b->edit_original) {
-            const char *cur = b->edit_values[idx];
+        if (!b->drillthrough_mode && b->edit_values && b->edit_original) {
+            const char *cur  = b->edit_values[idx];
             const char *orig = b->edit_original[idx];
             if (cur == NULL && orig != NULL) modified = 1;
             else if (cur != NULL && orig == NULL) modified = 1;
@@ -265,14 +287,10 @@ void ui_draw_fields_view(Browser *b, WINDOW *w, int height, int width)
 
         Buf line;
         buf_init(&line);
-        buf_printf(&line, " %s%-*s: ", modified ? "*" : " ",
-                   max_name_w, b->current_columns[idx]);
+        buf_printf(&line, " %s%-*s: ", modified ? "*" : " ", max_name_w, cols[idx]);
 
-        const char *val = b->edit_values ? b->edit_values[idx] : NULL;
-        if (val == NULL)
-            buf_append_str(&line, "NULL");
-        else
-            buf_append_str(&line, val);
+        const char *val = vals ? vals[idx] : NULL;
+        buf_append_str(&line, val ? val : "NULL");
 
         ui_safe_addstr_full(w, row_y, 0, line.data, attr, width);
         buf_free(&line);
@@ -854,7 +872,10 @@ void ui_draw_single_table_row(Browser *b, WINDOW *w, int idx, int height, int wi
 
     Buf line;
     buf_init(&line);
-    buf_printf(&line, " %s %-24s ", is_selected ? "\xe2\x96\xba" : " ", t->name);
+    buf_printf(&line, " %s%s %-23s ",
+               is_selected ? "\xe2\x96\xba" : " ",
+               t->is_view ? "V" : " ",
+               t->name);
     buf_append_char(&line, '(');
     for (int j = 0; j < t->ncols; j++) {
         if (j > 0) buf_append_str(&line, ", ");

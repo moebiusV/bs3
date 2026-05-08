@@ -7,7 +7,9 @@
 #include "util.h"
 #include <stdlib.h>
 #include <string.h>
+#include <stdio.h>
 #include <time.h>
+#include <unistd.h>
 
 void browser_init(Browser *b, Database *db)
 {
@@ -21,8 +23,98 @@ void browser_init(Browser *b, Database *db)
     browser_load_config(b);
 }
 
+void browser_free_drillthrough(Browser *b)
+{
+    if (b->drillthrough_cols) {
+        for (int i = 0; i < b->drillthrough_ncols; i++)
+            free(b->drillthrough_cols[i]);
+        free(b->drillthrough_cols);
+        b->drillthrough_cols = NULL;
+    }
+    if (b->drillthrough_vals) {
+        for (int i = 0; i < b->drillthrough_ncols; i++)
+            free(b->drillthrough_vals[i]);
+        free(b->drillthrough_vals);
+        b->drillthrough_vals = NULL;
+    }
+    free(b->drillthrough_table);
+    b->drillthrough_table = NULL;
+    b->drillthrough_mode = 0;
+    b->drillthrough_ncols = 0;
+}
+
+void browser_enter_drillthrough(Browser *b)
+{
+    if (b->sel_row < 0 || b->sel_row >= b->rowset.nrows) return;
+
+    /* Load config: view_drillthrough:viewname = "source_table:key_col" */
+    Buf cfgkey;
+    buf_init(&cfgkey);
+    buf_printf(&cfgkey, "view_drillthrough:%s", b->current_table);
+    char *config = db_load_config(b->db, cfgkey.data);
+    buf_free(&cfgkey);
+
+    if (!config) {
+        browser_set_message(b, "No drillthrough configured (set view_drillthrough:<view> in _browse_config).");
+        return;
+    }
+
+    /* Config format: "key_col_in_view:display_label:SELECT ... WHERE ... = ?"
+     * Split on first two colons; SQL may freely contain colons after that. */
+    char *colon1 = strchr(config, ':');
+    char *colon2 = colon1 ? strchr(colon1 + 1, ':') : NULL;
+    if (!colon1 || !colon2) {
+        free(config);
+        browser_set_message(b, "Bad drillthrough config (expected key_col:label:SQL).");
+        return;
+    }
+    *colon1 = '\0';
+    *colon2 = '\0';
+    const char *key_col = config;
+    const char *label   = colon1 + 1;
+    const char *sql     = colon2 + 1;
+
+    /* Find key_col in the view's columns */
+    int key_idx = -1;
+    for (int i = 0; i < b->ncols; i++) {
+        if (strcmp(b->current_columns[i], key_col) == 0) { key_idx = i; break; }
+    }
+    if (key_idx < 0) {
+        free(config);
+        browser_set_message(b, "Drillthrough key column not found in view.");
+        return;
+    }
+
+    const char *key_val = b->rowset.rows[b->sel_row].values[key_idx];
+    if (!key_val) {
+        free(config);
+        browser_set_message(b, "Drillthrough key is NULL for this row.");
+        return;
+    }
+
+    char **cols = NULL, **vals = NULL;
+    int ncols = 0;
+    if (!db_fetch_row_by_sql(b->db, sql, key_val, &cols, &ncols, &vals)) {
+        free(config);
+        browser_set_message(b, "No matching row found in source table.");
+        return;
+    }
+
+    browser_free_drillthrough(b);
+    b->drillthrough_mode   = 1;
+    b->drillthrough_table  = xstrdup(label);
+    free(config);
+    b->drillthrough_cols   = cols;
+    b->drillthrough_vals   = vals;
+    b->drillthrough_ncols  = ncols;
+    b->sel_field           = 0;
+    b->field_scroll        = 0;
+    b->current_view        = VIEW_FIELDS;
+}
+
 void browser_destroy(Browser *b)
 {
+    browser_free_drillthrough(b);
     browser_free_table_data(b);
     browser_free_sort_state(b);
     browser_free_find_dialog(b);
@@ -108,9 +200,11 @@ void browser_load_table(Browser *b, const char *table_name)
     /* From here on, use b->current_table — table_name may be dangling */
 
     /* Find table info to get columns */
+    b->current_is_view = 0;
     for (int i = 0; i < b->ntables; i++) {
         if (strcmp(b->tables[i].name, b->current_table) == 0) {
             b->ncols = b->tables[i].ncols;
+            b->current_is_view = b->tables[i].is_view;
             b->current_columns = xcalloc((size_t)b->ncols, sizeof(char *));
             for (int j = 0; j < b->ncols; j++)
                 b->current_columns[j] = xstrdup(b->tables[i].columns[j]);
@@ -196,6 +290,7 @@ void browser_load_table(Browser *b, const char *table_name)
                  b->find_where,
                  (const char **)b->find_params, b->nfind_params,
                  order_by,
+                 b->current_is_view,
                  &b->rowset);
     free(order_by);
 
@@ -355,6 +450,85 @@ void browser_set_message(Browser *b, const char *msg)
     b->message = msg ? xstrdup(msg) : NULL;
 }
 
+/* --- Screen buffer dump (debugging) --- */
+
+/* Dump the full ncurses virtual screen: text + per-cell color-pair map.
+ * Color pairs let us see which rows are selected, blank, or corrupted. */
+void browser_dump_screen(Browser *b)
+{
+    static int dump_seq = 0;
+    (void)b;
+
+    struct timespec ts;
+    clock_gettime(CLOCK_REALTIME, &ts);
+    char path[80];
+    snprintf(path, sizeof(path), "/tmp/bs3-%04d-%ld%03ld.txt",
+             dump_seq++, (long)ts.tv_sec, (long)(ts.tv_nsec / 1000000));
+
+    FILE *fp = fopen(path, "w");
+    if (!fp) return;
+
+    int maxy, maxx;
+    getmaxyx(stdscr, maxy, maxx);
+    fprintf(fp, "ncurses screen  %dx%d  %s\n", maxx, maxy, path);
+    fprintf(fp, "color pairs: 1=NORM 2=SEL 3=BRIGHT 4=TITLE 5=STATUS 6=ERROR 7=HELP 8=HK 9=BORDER\n\n");
+
+    char *text  = malloc((size_t)(maxx * 4 + 4));
+    chtype *cells = malloc((size_t)(maxx + 2) * sizeof(chtype));
+    char *pairs = malloc((size_t)(maxx + 2));
+    if (!text || !cells || !pairs) { free(text); free(cells); free(pairs); fclose(fp); return; }
+
+    for (int y = 0; y < maxy; y++) {
+        /* Text content */
+        int n = mvwinnstr(stdscr, y, 0, text, maxx);
+        if (n < 0) n = 0;
+        text[n] = '\0';
+
+        /* Per-cell color pair: mvwinchnstr gives chtype (char+attrs) per cell */
+        int nc = mvwinchnstr(stdscr, y, 0, cells, maxx);
+        if (nc < 0) nc = 0;
+
+        /* Build compact pair string: digit = pair number, '.' = pair 0/unknown */
+        for (int x = 0; x < nc; x++) {
+            int p = PAIR_NUMBER(cells[x] & A_COLOR);
+            pairs[x] = (p > 0 && p <= 9) ? (char)('0' + p) : '.';
+        }
+        /* Compress run-length into spans: "1×5,2×3,..." for readability */
+        /* Instead, just detect first/last non-1 pair per row for compactness */
+        /* Find the dominant non-normal pair (if any) */
+        int sel = 0, title = 0, status = 0;
+        for (int x = 0; x < nc; x++) {
+            int p = PAIR_NUMBER(cells[x] & A_COLOR);
+            if (p == C_SELECTED) sel++;
+            else if (p == C_TITLE)  title++;
+            else if (p == C_STATUS) status++;
+        }
+        pairs[nc] = '\0';
+
+        /* Label: which special attribute dominates this row? */
+        const char *attr = "     ";
+        if (status > 10)      attr = "NAVBR";
+        else if (title  > 10) attr = "TITLE";
+        else if (sel    > 5)  attr = " SEL ";
+        else if (sel    > 0)  attr = " sel?";
+
+        fprintf(fp, "[%2d] len=%-3d %s |%s|\n", y, n, attr, text);
+
+        /* If row has mixed/unexpected pairs, dump the full pair map on next line */
+        if (sel > 0 && sel < nc/2) {
+            /* partial selection — show exactly where */
+            fprintf(fp, "     attr: %s\n", pairs);
+        }
+    }
+
+    free(text); free(cells); free(pairs);
+    fclose(fp);
+
+    /* Show path in status message — caller must set b->message */
+    free(b->message);
+    b->message = xstrdup(path);
+}
+
 /* --- Main loop --- */
 
 void browser_run(Browser *b, WINDOW *stdscr)
@@ -364,6 +538,18 @@ void browser_run(Browser *b, WINDOW *stdscr)
     bkgd(COLOR_PAIR(C_NORMAL));
     curs_set(0);
     erase();
+
+    /* Disable terminal auto-wrap (DECAWM off).  When EAW=Ambiguous chars
+     * render wider in the terminal than wcwidth() reports, content can
+     * silently overflow the last column.  With DECAWM on that overflow wraps
+     * to the next physical row, causing ncurses to lose sync (blank lines,
+     * row-offset drift).  With DECAWM off, overflow is clipped at the last
+     * column — no wrap, no drift.  We restore wrap on exit.
+     *
+     * We flush ncurses' output first, then write directly to the terminal fd
+     * so the escape sequence is guaranteed to arrive before the next refresh. */
+    refresh();
+    if (write(STDOUT_FILENO, "\033[?7l", 5)) {}
 
     const double FRAME_SEC = 1.0 / 30.0;
     int prev_view = -1;
@@ -431,10 +617,13 @@ void browser_run(Browser *b, WINDOW *stdscr)
                 ui_draw_find_dialog(b, stdscr, height, width);
             else
                 curs_set(0);
+
         }
 
-        if (!did_partial)
-            touchwin(stdscr);
+        /* Force ncurses to emit an explicit CUP at the start of each row so
+         * any EAW cursor-drift is contained within a single row and never
+         * carries over to the next. */
+        redrawwin(stdscr);
         refresh();
 
         /* Save state for partial redraw detection */
@@ -548,6 +737,9 @@ void browser_run(Browser *b, WINDOW *stdscr)
             }
         }
     }
+
+    /* Restore terminal auto-wrap before handing back to the shell. */
+    if (write(STDOUT_FILENO, "\033[?7h", 5)) {}
 }
 
 /* --- Sort overlay --- */

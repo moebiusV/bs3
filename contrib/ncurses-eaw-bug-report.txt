@@ -1,0 +1,305 @@
+To: Thomas E. Dickey <dickey@invisible-island.net>
+Subject: Cursor movement optimisation breaks rendering when terminal EAW width
+         diverges from wcwidth() — request for absolute-positioning escape hatch
+
+------------------------------------------------------------------------
+SUMMARY
+------------------------------------------------------------------------
+
+ncurses selects LF+CR over CUP (cursor_address) for inter-row cursor
+movement as a bandwidth optimisation.  This choice is correct when the
+terminal's internal cursor position matches ncurses' internal model, but
+silently catastrophic when the two diverge — specifically when a Unicode
+character's rendered glyph width in the terminal differs from what
+wcwidth() reports.  The divergence causes the cursor to auto-wrap during
+a write, placing it at the beginning of row Y+1.  ncurses then emits
+LF+CR thinking it is advancing from row Y to Y+1, but Alacritty executes
+it from row Y+1 and lands at row Y+2.  The result is blank rows,
+displaced content, and duplicate selection highlights — all invisible to
+ncurses' virtual buffer, which remains correct throughout.
+
+The workaround is to disable DECAWM (auto-wrap) for the duration of the
+ncurses session by writing ESC[?7l directly to the terminal fd after
+ncurses' first refresh().  With DECAWM off, overflow is clipped rather
+than wrapped, the cursor stays in row Y, and LF+CR correctly lands at
+(Y+1, 0).  This should not need to be the application's problem.
+
+------------------------------------------------------------------------
+ENVIRONMENT
+------------------------------------------------------------------------
+
+Terminal emulator : Alacritty (GPU-rendered, VT100-compatible)
+OS                : Linux (WSL2, kernel 6.6.87)
+ncurses version   : ncursesw (wide-character variant, system package)
+TERM              : xterm-256color
+Font              : renders U+2014 EM DASH as 2 terminal columns
+                    (font glyph advance wider than Unicode EAW=A implies)
+
+------------------------------------------------------------------------
+BACKGROUND: THE EAW=AMBIGUOUS PROBLEM
+------------------------------------------------------------------------
+
+Unicode assigns an "East Asian Width" (EAW) property to every codepoint.
+Most codepoints of interest here are EAW=A (Ambiguous): the Unicode
+standard says their rendered width depends on context and is unspecified
+for non-CJK environments.  In practice:
+
+  - glibc's wcwidth() returns 1 for EAW=A characters on en_US.UTF-8
+    locales (the most common Linux configuration).
+  - Some terminal emulators, notably Alacritty and many others when paired
+    with certain fonts, render EAW=A glyphs at 2 columns because the font's
+    advance width for those glyphs is > 1 cell.
+
+The affected characters include em-dash (U+2014), curly quotes (U+2018,
+U+2019, U+201C, U+201D), the bullet (U+2022), and dozens of other common
+punctuation characters used in everyday English prose.  Applications that
+display user-generated text will encounter them constantly.
+
+ncurses inherits the problem from wcwidth() — it uses wcwidth() to
+determine how many columns each character occupies when advancing its
+internal cursor-position model.  When wcwidth() returns 1 for a character
+that the terminal renders at 2 columns, ncurses' model and the terminal's
+actual cursor diverge by 1 column per such character.
+
+------------------------------------------------------------------------
+HOW THE DIVERGENCE CAUSES CORRUPTION
+------------------------------------------------------------------------
+
+Consider a 200-column terminal displaying a row of text whose visible
+content contains N EAW=Ambiguous characters, each rendered at 2 columns
+by the terminal but reported as 1 by wcwidth().
+
+ncurses writes the row using mvwaddstr().  After the write:
+
+  ncurses model: cursor at column (content_width - N)
+  terminal actual: cursor at column  content_width
+
+If content_width >= 200, DECAWM (auto-wrap) fires mid-write.  The
+character that would land on column 200 instead wraps to (row+1, 0),
+and the write continues there.  The terminal's cursor is now at
+(row+1, K) for some K > 0.
+
+ncurses does not know this happened.  Its model says cursor is at
+(row, content_width - N).  When ncurses needs to advance to row+1 to
+write the next line, it computes the cheapest cursor movement from
+(row, content_width-N) to (row+1, 0).  The answer is LF + CR:
+
+  LF:  ncurses model: (row, content_width-N) → (row+1, content_width-N)
+       terminal actual: (row+1, K)            → (row+2, K)       ← WRONG
+  CR:  ncurses model: (row+1, 0)
+       terminal actual: (row+2, 0)                                ← WRONG
+
+ncurses is now writing row+1's content at physical row+2.  Physical
+row+1 contains only the overflow characters from the wrap — which looks
+blank or has only a few stray glyphs.  Every subsequent row is displaced
+by one.  If M rows overflow, all content below them is displaced by M.
+
+Because ncurses' virtual buffer (curscr/newscr) is never wrong — only
+the physical terminal state is — the application cannot detect or correct
+the problem through any standard ncurses API.
+
+------------------------------------------------------------------------
+WHY redrawwin() IS INSUFFICIENT
+------------------------------------------------------------------------
+
+Our first attempt at a fix was redrawwin(stdscr) before every refresh().
+The intent: force ncurses to emit CUP (cursor_address) at the start of
+each row, containing drift to within a single row.
+
+redrawwin() does mark all lines dirty, which causes ncurses to emit an
+explicit cursor_address sequence at the start of each *changed region*.
+However, when multiple consecutive rows are all dirty — the common case
+after a page scroll — ncurses emits cursor_address for the first row and
+then uses LF+CR for each subsequent row, because consecutive-row movement
+is cheap.  The optimisation fires exactly in the scenario where it is
+harmful.
+
+redrawwin() is therefore no help for the inter-row movement problem.
+It reduces the scope of drift to rows that happen to be the first in a
+changed region, but for a full-screen redraw every row is in the same
+region and the issue is unchanged.
+
+------------------------------------------------------------------------
+WHY clearok() WORKS BUT IS UNACCEPTABLE
+------------------------------------------------------------------------
+
+clearok(stdscr, TRUE) causes ncurses to emit ESC[2J (erase display) +
+cursor home before the next refresh().  After the clear, ncurses knows
+the cursor is at (0,0), and emits cursor_address for every subsequent
+non-adjacent move.  This does force CUP for every row transition,
+preventing the drift cascade.
+
+However, clearok() erases the visible screen before repainting it.
+On every keypress — including simple j/k cursor movement — the screen
+briefly goes blank before the next frame appears.  For a full-screen
+interactive application this flicker is unacceptable.
+
+------------------------------------------------------------------------
+THE ACTUAL FIX: DISABLE DECAWM
+------------------------------------------------------------------------
+
+The fix that worked cleanly is disabling terminal auto-wrap for the
+duration of the ncurses session:
+
+    /* After first refresh() to drain ncurses' buffer: */
+    write(STDOUT_FILENO, "\033[?7l", 5);   /* DECAWM off */
+
+    /* ... ncurses main loop ... */
+
+    /* Before returning control to the shell: */
+    write(STDOUT_FILENO, "\033[?7h", 5);   /* DECAWM on */
+
+With DECAWM off, any character that would overflow column 199 is simply
+discarded.  The cursor stays at column 199.  When ncurses then emits
+LF+CR to advance to the next row:
+
+    LF from (row, 199): terminal moves to (row+1, 199)
+    CR:                 terminal moves to (row+1, 0)   ← correct
+
+The column-position mismatch (ncurses thinks C, terminal has 199) no
+longer causes row displacement because LF from any column within the
+same row always advances by exactly one row.
+
+Note: we could not use putp(tigetstr("rmam")) for this because putp()
+writes through stdio's putchar(), while ncurses' refresh() writes via a
+separate internal buffer that bypasses stdio.  The sequences can arrive
+at the terminal fd out of order.  The write() syscall after an explicit
+refresh() guarantees correct sequencing.
+
+------------------------------------------------------------------------
+WHICH EARLIER "FIXES" WERE ACTUALLY NECESSARY
+------------------------------------------------------------------------
+
+In the course of debugging this we made several other changes.  In
+hindsight, given that DECAWM-off is the root fix:
+
+GENUINELY NECESSARY — fixes a real separate bug:
+  - Moved wclrtoeol() to *before* mvwaddstr() in the row-drawing
+    function.  When partial redraws (single-row updates) clear the row
+    after writing content, the erase starts from ncurses' underestimated
+    cursor position.  The columns between ncurses' estimate and the
+    terminal's actual position retain the previous frame's background
+    colour (e.g. green selection highlight), producing a "doubled cursor"
+    appearance on j/k movement.  Erasing before writing, from a known
+    position (wmove to col 0), fixes this independently of DECAWM.
+
+HELPED SYMPTOMATICALLY, NOT THE ROOT CAUSE:
+  - redrawwin() before refresh(): contains drift to within single rows
+    for the first dirty row in each region.  Improved recovery but did
+    not prevent blank lines.
+  - EAW probe + is_eaw_ambiguous() + str_truncate_to_width(): makes
+    our own truncation accurate, so we show as many characters as
+    possible without our code causing overflow.  Still necessary for
+    correct display but does not prevent ncurses from causing overflow
+    through cursor-position mistracking in mvwaddstr itself.
+  - FE0F (emoji variation selector) lookahead: correct behaviour for
+    emoji presentation sequences.  Still useful.
+  - Extended EAW=A ranges (0x2600–0x27BF hardcoded as 2; 0x2B00–0x2BFF
+    added): useful for display accuracy, not for the blank-lines bug.
+
+DID NOT FIX ANYTHING, INTRODUCED FLICKER:
+  - clearok() before refresh(): worked mechanically but the flicker was
+    unacceptable.  Replaced by DECAWM-off.
+
+------------------------------------------------------------------------
+WHAT ncurses SHOULD DO DIFFERENTLY
+------------------------------------------------------------------------
+
+1. PROVIDE AN ESCAPE HATCH FROM RELATIVE CURSOR MOVEMENT
+
+   The core issue is that ncurses' cursor-movement optimiser has no way
+   to know it is wrong.  An application that knows its terminal renders
+   certain characters wider than wcwidth() reports has no way to tell
+   ncurses "use absolute addressing between rows."
+
+   A simple addition would be a flag or function:
+
+       use_absolute_cursor_addressing(TRUE);   /* always emit CUP */
+
+   This would make ncurses "less smart" in a way that is correct when
+   the application has reason to distrust relative positioning.  The
+   performance cost is a few extra bytes per row — negligible on any
+   connection faster than a 2400-baud modem.
+
+2. PROVIDE MANAGED DECAWM CONTROL
+
+   ncurses is already aware of the rmam/smam terminfo capabilities and
+   uses them internally when writing to the last column (xenl handling).
+   It would be natural to expose:
+
+       noautowrap();   /* emit rmam, suppress re-enabling during refresh */
+       autowrap();     /* emit smam */
+
+   and guarantee that refresh() does not re-enable auto-wrap between
+   calls.  Currently there is no safe way to disable DECAWM for an
+   ncurses session because ncurses may emit smam internally.
+
+3. ACCEPT A CALLER-SUPPLIED WIDTH FUNCTION
+
+   The cleanest long-term fix:
+
+       set_wcwidth_fn(int (*fn)(wchar_t));
+
+   ncurses would call fn() instead of wcwidth() for all cursor-position
+   accounting.  Applications that know their terminal's EAW behaviour
+   (via probe or configuration) could supply an accurate function.
+   This is analogous to the existing set_escdelay() and set_tabsize()
+   APIs.
+
+------------------------------------------------------------------------
+MINIMAL REPRODUCER
+------------------------------------------------------------------------
+
+Environment: Alacritty, font with wide em-dash, TERM=xterm-256color,
+             locale en_US.UTF-8.
+
+    #include <ncurses.h>
+    #include <string.h>
+
+    int main(void) {
+        initscr();
+        raw(); noecho(); keypad(stdscr, TRUE);
+
+        /* Row 0: contains em-dash (U+2014), EAW=A, wcwidth()=1,
+         * but renders 2 columns wide in Alacritty.
+         * We write 199 "wide" chars + 1 em-dash = 200 columns by
+         * ncurses' model, but 201 columns in the terminal. */
+        char line[512];
+        memset(line, 'X', 198);
+        memcpy(line + 198, "\xe2\x80\x94", 3);  /* U+2014 */
+        line[201] = '\0';
+
+        mvaddstr(0, 0, line);   /* overflows by 1 col in terminal */
+        mvaddstr(1, 0, "ROW 1: should appear here");
+        mvaddstr(2, 0, "ROW 2: should appear here");
+        refresh();
+
+        /* Expected: ROW 1 at physical row 1, ROW 2 at physical row 2.
+         * Actual: ROW 1 at physical row 2 (row 1 is blank),
+         *         ROW 2 at physical row 3. */
+
+        getch();
+        endwin();
+        return 0;
+    }
+
+    /* Compile: gcc -o repro repro.c -lncursesw */
+
+------------------------------------------------------------------------
+WORKAROUND (for application developers)
+------------------------------------------------------------------------
+
+After the first refresh(), write ESC[?7l directly to the terminal fd:
+
+    refresh();
+    write(STDOUT_FILENO, "\033[?7l", 5);  /* DECAWM off */
+
+Restore before exit:
+
+    write(STDOUT_FILENO, "\033[?7h", 5);  /* DECAWM on */
+    endwin();
+
+Do not use putp(tigetstr("rmam")) — the stdio path used by putp() and
+ncurses' internal write path may arrive at the terminal out of order.
+
+------------------------------------------------------------------------

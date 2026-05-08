@@ -41,6 +41,7 @@ typedef struct Browser {
 
     /* Row browser state */
     char *current_table;
+    int current_is_view;
     char **current_columns;
     int ncols;
     RowSet rowset;
@@ -105,6 +106,13 @@ typedef struct Browser {
     char *pending_paste;  /* held across safe-mode paste confirmation */
     int pending_cut;      /* 1 if safe-mode confirmation is for a cut (copy+NULL) */
 
+    /* Drillthrough state (view row → source table full row) */
+    int drillthrough_mode;
+    char *drillthrough_table;
+    char **drillthrough_cols;
+    char **drillthrough_vals;
+    int drillthrough_ncols;
+
     /* Config cache */
     char **table_display_order;
     int ntable_order;
@@ -135,6 +143,10 @@ void browser_populate_edit(Browser *b);
 /* Set a status message (takes ownership of msg if heap-allocated) */
 void browser_set_message(Browser *b, const char *msg);
 
+/* Dump the ncurses virtual screen (text + color-pair per row) to a timestamped
+ * file in /tmp and set b->message to the path. */
+void browser_dump_screen(Browser *b);
+
 /* Sort overlay */
 void browser_open_sort(Browser *b);
 void browser_apply_sort(Browser *b);
@@ -149,5 +161,9 @@ void browser_free_find_dialog(Browser *b);
 
 /* Config-driven table order */
 void browser_load_config(Browser *b);
+
+/* Drillthrough: open source table row from a view row */
+void browser_enter_drillthrough(Browser *b);
+void browser_free_drillthrough(Browser *b);
 
 #endif

@@ -8,6 +8,7 @@
 #include "browser.h"
 #include "db.h"
 #include "util.h"
+#include "uniwidth.h"
 
 static void usage(void)
 {
@@ -51,6 +52,9 @@ int main(int argc, char **argv)
             return 1;
         }
     }
+
+    /* Detect terminal EAW rendering before ncurses takes over the fd */
+    terminal_probe_eaw_width();
 
     /* Initialize curses */
     initscr();
