@@ -91,6 +91,11 @@ typedef struct Browser {
     char **find_params;
     int nfind_params;
 
+    /* Find/filter history */
+    char **find_history;     /* malloc'd strings, newest at [0] */
+    int nfind_history;
+    int find_history_pos;    /* -1 = editing fresh, >=0 = browsing index */
+
     /* Find dialog */
     int find_dialog;
     char **find_dialog_inputs;
@@ -121,6 +126,9 @@ typedef struct Browser {
 /* Lifecycle */
 void browser_init(Browser *b, Database *db);
 void browser_destroy(Browser *b);
+
+/* Load find history for a given view and context */
+void browser_load_find_history(Browser *b, const char *view, const char *context);
 
 /* Main loop */
 void browser_run(Browser *b, WINDOW *stdscr);

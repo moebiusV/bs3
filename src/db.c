@@ -9,6 +9,25 @@
 #include <pwd.h>
 #include <grp.h>
 #include <unistd.h>
+#include <regex.h>
+
+static void regexp_func(sqlite3_context *ctx, int argc, sqlite3_value **argv)
+{
+    (void)argc;
+    const char *pattern = (const char *)sqlite3_value_text(argv[0]);
+    const char *text    = (const char *)sqlite3_value_text(argv[1]);
+    if (!pattern || !text) {
+        sqlite3_result_int(ctx, 0);
+        return;
+    }
+    regex_t re;
+    if (regcomp(&re, pattern, REG_EXTENDED | REG_NOSUB) != 0) {
+        sqlite3_result_error(ctx, "invalid regex", -1);
+        return;
+    }
+    sqlite3_result_int(ctx, regexec(&re, text, 0, NULL, 0) == 0);
+    regfree(&re);
+}
 
 Database *db_open(const char *path)
 {
@@ -22,6 +41,8 @@ Database *db_open(const char *path)
         free(d);
         return NULL;
     }
+    sqlite3_create_function(d->db, "regexp", 2, SQLITE_UTF8, NULL,
+                            regexp_func, NULL, NULL);
     return d;
 }
 
@@ -325,6 +346,85 @@ int db_save_config(Database *d, const char *key, const char *json_value)
     rc = sqlite3_step(stmt);
     sqlite3_finalize(stmt);
     return (rc == SQLITE_DONE) ? 0 : -1;
+}
+
+/* --- Find history persistence --- */
+
+void db_ensure_find_history_table(Database *d)
+{
+    char *sql = "CREATE TABLE IF NOT EXISTS _find_history ("
+                "view TEXT NOT NULL,"
+                "context TEXT,"
+                "find_query TEXT NOT NULL)";
+    sqlite3_exec(d->db, sql, NULL, NULL, NULL);
+}
+
+int db_save_find_history(Database *d, const char *view, const char *context,
+                         const char *query)
+{
+    db_ensure_find_history_table(d);
+    /* Delete existing identical row so the new INSERT gets a higher rowid */
+    sqlite3_stmt *stmt;
+    int rc = sqlite3_prepare_v2(d->db,
+        "DELETE FROM _find_history WHERE view=? AND context IS NOT DISTINCT FROM ? AND find_query=?",
+        -1, &stmt, NULL);
+    if (rc != SQLITE_OK) return -1;
+    sqlite3_bind_text(stmt, 1, view, -1, SQLITE_STATIC);
+    if (context)
+        sqlite3_bind_text(stmt, 2, context, -1, SQLITE_STATIC);
+    else
+        sqlite3_bind_null(stmt, 2);
+    sqlite3_bind_text(stmt, 3, query, -1, SQLITE_STATIC);
+    sqlite3_step(stmt);
+    sqlite3_finalize(stmt);
+
+    /* Insert the new row */
+    rc = sqlite3_prepare_v2(d->db,
+        "INSERT INTO _find_history (view, context, find_query) VALUES (?, ?, ?)",
+        -1, &stmt, NULL);
+    if (rc != SQLITE_OK) return -1;
+    sqlite3_bind_text(stmt, 1, view, -1, SQLITE_STATIC);
+    if (context)
+        sqlite3_bind_text(stmt, 2, context, -1, SQLITE_STATIC);
+    else
+        sqlite3_bind_null(stmt, 2);
+    sqlite3_bind_text(stmt, 3, query, -1, SQLITE_STATIC);
+    rc = sqlite3_step(stmt);
+    sqlite3_finalize(stmt);
+    return (rc == SQLITE_DONE) ? 0 : -1;
+}
+
+char **db_load_find_history(Database *d, const char *view, const char *context,
+                            int *count)
+{
+    *count = 0;
+    sqlite3_stmt *stmt;
+    int rc = sqlite3_prepare_v2(d->db,
+        "SELECT find_query FROM _find_history "
+        "WHERE view=? AND context IS NOT DISTINCT FROM ? "
+        "ORDER BY rowid DESC",
+        -1, &stmt, NULL);
+    if (rc != SQLITE_OK) return NULL;
+    sqlite3_bind_text(stmt, 1, view, -1, SQLITE_STATIC);
+    if (context)
+        sqlite3_bind_text(stmt, 2, context, -1, SQLITE_STATIC);
+    else
+        sqlite3_bind_null(stmt, 2);
+
+    /* Count rows first */
+    int n = 0;
+    while (sqlite3_step(stmt) == SQLITE_ROW) n++;
+    sqlite3_reset(stmt);
+
+    char **result = xcalloc((size_t)(n > 0 ? n : 1), sizeof(char *));
+    int i = 0;
+    while (sqlite3_step(stmt) == SQLITE_ROW) {
+        const char *val = (const char *)sqlite3_column_text(stmt, 0);
+        result[i++] = val ? xstrdup(val) : xstrdup("");
+    }
+    sqlite3_finalize(stmt);
+    *count = n;
+    return result;
 }
 
 /* --- Drillthrough row fetch --- */

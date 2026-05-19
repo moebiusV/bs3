@@ -7,7 +7,7 @@
 #include <stdlib.h>
 #include <locale.h>
 
-/* CGA palette RGB values (0-1000 scale for ncurses) */
+/* CGA palette RGB values (0-1000 scale for init_color) */
 #define CGA_BLACK_R   0, CGA_BLACK_G   0, CGA_BLACK_B   0
 #define CGA_BLUE_R    0, CGA_BLUE_G    0, CGA_BLUE_B  667
 #define CGA_GREEN_R   0, CGA_GREEN_G 667, CGA_GREEN_B   0
@@ -16,44 +16,88 @@
 #define CGA_YELLOW_R 1000, CGA_YELLOW_G 1000, CGA_YELLOW_B 333
 #define CGA_WHITE_R 1000, CGA_WHITE_G 1000, CGA_WHITE_B 1000
 
+/* CGA palette RGB values (0-255 scale for init_extended_pair).
+ * Encoded as (R<<16)|(G<<8)|B — ncurses extended colour format. */
+#define XCGA_BLACK  ((0<<16)|(0<<8)|0)
+#define XCGA_BLUE   ((0<<16)|(0<<8)|170)
+#define XCGA_GREEN  ((0<<16)|(170<<8)|0)
+#define XCGA_CYAN   ((0<<16)|(170<<8)|170)
+#define XCGA_RED    ((170<<16)|(0<<8)|0)
+#define XCGA_YELLOW ((255<<16)|(255<<8)|85)
+#define XCGA_WHITE  ((255<<16)|(255<<8)|255)
+
 /* Color indices 16-22 for CGA palette */
 enum {
     CI_BLACK = 16, CI_BLUE, CI_GREEN, CI_CYAN, CI_RED, CI_YELLOW, CI_WHITE
 };
+
+/* Cube indices from the 216-color palette (16–231).
+ * Chosen as the closest match to CGA when init_color is unavailable
+ * (tmux, screen, and other multiplexers).  CGA → cube:
+ *   Bk(0,0,0) → 16    Bu(0,0,170) → 19    Gn(0,170,0) → 34
+ *   Cy(0,170,170)→37  Rd(170,0,0) → 124   Ye(255,255,85)→227
+ *   Wh(255,255,255)→231                                        */
+enum { CUBE_BLACK=16, CUBE_BLUE=19, CUBE_GREEN=34, CUBE_CYAN=37,
+       CUBE_RED=124,  CUBE_YELLOW=227, CUBE_WHITE=231 };
 
 void ui_init_colors(void)
 {
     start_color();
 
     if (can_change_color() && COLORS >= 23) {
-        init_color(CI_BLACK,    0,    0,    0);
-        init_color(CI_BLUE,     0,    0,  667);
-        init_color(CI_GREEN,    0,  667,    0);
-        init_color(CI_CYAN,     0,  667,  667);
-        init_color(CI_RED,    667,    0,    0);
-        init_color(CI_YELLOW, 1000, 1000, 333);
-        init_color(CI_WHITE,  1000, 1000, 1000);
+        /* Probe: set one colour then read it back to see if honoured */
+        init_color(CI_BLUE, 0, 0, 667);
+        short r, g, b;
+        color_content(CI_BLUE, &r, &g, &b);
+        if (r == 0 && g == 0 && b == 667) {
+            /* Palette changes work — set the full CGA palette */
+            init_color(CI_BLACK,    0,    0,    0);
+            init_color(CI_GREEN,    0,  667,    0);
+            init_color(CI_CYAN,     0,  667,  667);
+            init_color(CI_RED,    667,    0,    0);
+            init_color(CI_YELLOW, 1000, 1000, 333);
+            init_color(CI_WHITE,  1000, 1000, 1000);
 
-        init_pair(C_NORMAL,   CI_YELLOW, CI_BLUE);
-        init_pair(C_SELECTED, CI_WHITE,  CI_GREEN);
-        init_pair(C_BRIGHT,   CI_WHITE,  CI_BLUE);
-        init_pair(C_TITLE,    CI_WHITE,  CI_CYAN);
-        init_pair(C_STATUS,   CI_BLACK,  CI_CYAN);
-        init_pair(C_ERROR,    CI_WHITE,  CI_RED);
-        init_pair(C_HELP,     CI_BLACK,  CI_CYAN);
-        init_pair(C_HELP_KEY, CI_WHITE,  CI_CYAN);
-        init_pair(C_BORDER,   CI_CYAN,   CI_BLUE);
-    } else {
-        init_pair(C_NORMAL,   COLOR_YELLOW, COLOR_BLUE);
-        init_pair(C_SELECTED, COLOR_WHITE,  COLOR_GREEN);
-        init_pair(C_BRIGHT,   COLOR_WHITE,  COLOR_BLUE);
-        init_pair(C_TITLE,    COLOR_WHITE,  COLOR_CYAN);
-        init_pair(C_STATUS,   COLOR_BLACK,  COLOR_CYAN);
-        init_pair(C_ERROR,    COLOR_WHITE,  COLOR_RED);
-        init_pair(C_HELP,     COLOR_BLACK,  COLOR_CYAN);
-        init_pair(C_HELP_KEY, COLOR_WHITE,  COLOR_CYAN);
-        init_pair(C_BORDER,   COLOR_CYAN,   COLOR_BLUE);
+            init_pair(C_NORMAL,   CI_YELLOW, CI_BLUE);
+            init_pair(C_SELECTED, CI_WHITE,  CI_GREEN);
+            init_pair(C_BRIGHT,   CI_WHITE,  CI_BLUE);
+            init_pair(C_TITLE,    CI_WHITE,  CI_CYAN);
+            init_pair(C_STATUS,   CI_BLACK,  CI_CYAN);
+            init_pair(C_ERROR,    CI_WHITE,  CI_RED);
+            init_pair(C_HELP,     CI_BLACK,  CI_CYAN);
+            init_pair(C_HELP_KEY, CI_WHITE,  CI_CYAN);
+            init_pair(C_BORDER,   CI_CYAN,   CI_BLUE);
+            return;
+        }
+        /* init_color not honoured (tmux, screen, …) — fall through */
     }
+
+    /* Tier 2: direct RGB via init_extended_pair.
+     * Requires COLORS >= 16777216 (direct-colour terminfo like xterm-direct).
+     * Inside tmux this works when default-terminal is set to xterm-direct. */
+    if (COLORS >= 16777216) {
+        init_extended_pair(C_NORMAL,   XCGA_YELLOW, XCGA_BLUE);
+        init_extended_pair(C_SELECTED, XCGA_WHITE,  XCGA_GREEN);
+        init_extended_pair(C_BRIGHT,   XCGA_WHITE,  XCGA_BLUE);
+        init_extended_pair(C_TITLE,    XCGA_WHITE,  XCGA_CYAN);
+        init_extended_pair(C_STATUS,   XCGA_BLACK,  XCGA_CYAN);
+        init_extended_pair(C_ERROR,    XCGA_WHITE,  XCGA_RED);
+        init_extended_pair(C_HELP,     XCGA_BLACK,  XCGA_CYAN);
+        init_extended_pair(C_HELP_KEY, XCGA_WHITE,  XCGA_CYAN);
+        init_extended_pair(C_BORDER,   XCGA_CYAN,   XCGA_BLUE);
+        return;
+    }
+
+    /* Tier 3: closest matches from the terminal's fixed 256-colour cube */
+    init_pair(C_NORMAL,   CUBE_YELLOW, CUBE_BLUE);
+    init_pair(C_SELECTED, CUBE_WHITE,  CUBE_GREEN);
+    init_pair(C_BRIGHT,   CUBE_WHITE,  CUBE_BLUE);
+    init_pair(C_TITLE,    CUBE_WHITE,  CUBE_CYAN);
+    init_pair(C_STATUS,   CUBE_BLACK,  CUBE_CYAN);
+    init_pair(C_ERROR,    CUBE_WHITE,  CUBE_RED);
+    init_pair(C_HELP,     CUBE_BLACK,  CUBE_CYAN);
+    init_pair(C_HELP_KEY, CUBE_WHITE,  CUBE_CYAN);
+    init_pair(C_BORDER,   CUBE_CYAN,   CUBE_BLUE);
 }
 
 void ui_safe_addstr(WINDOW *w, int y, int x, const char *s, int attr)
@@ -297,6 +341,9 @@ void ui_draw_fields_view(Browser *b, WINDOW *w, int height, int width)
     }
 
     ui_draw_status_bar(b, w, height, width);
+    /* Position cursor on the selected field row */
+    if (b->sel_field >= b->field_scroll && b->sel_field < b->field_scroll + visible)
+        wmove(w, 2 + (b->sel_field - b->field_scroll), 0);
 }
 
 /* --- Status bar --- */

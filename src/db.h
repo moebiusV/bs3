@@ -66,6 +66,11 @@ void db_ensure_config_table(Database *d);
 char *db_load_config(Database *d, const char *key);   /* returns JSON string or NULL */
 int db_save_config(Database *d, const char *key, const char *json_value);
 
+/* Find history persistence (_find_history table) */
+void db_ensure_find_history_table(Database *d);
+int  db_save_find_history(Database *d, const char *view, const char *context, const char *query);
+char **db_load_find_history(Database *d, const char *view, const char *context, int *count);
+
 /* Fetch one row using a custom SQL query with a single ? bind parameter.
    Column names come from the result set (sqlite3_column_name).
    Returns 1 on success, 0 on failure or no matching row.

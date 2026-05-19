@@ -11,6 +11,49 @@
 #include <unistd.h>
 #include <sys/wait.h>
 
+/* --- Safe-mode prompt action callbacks --- */
+
+static void confirm_drop_table(Browser *b)
+{
+    char *name = xstrdup(b->tables[b->sel_table].name);
+    if (db_drop_table(b->db, name) == 0) {
+        Buf msg;
+        buf_init(&msg);
+        buf_printf(&msg, "Dropped table: %s", name);
+        browser_set_message(b, msg.data);
+        buf_free(&msg);
+        db_free_tables(b->tables, b->ntables);
+        b->tables = db_get_tables(b->db, &b->ntables);
+        if (b->sel_table >= b->ntables)
+            b->sel_table = b->ntables > 0 ? b->ntables - 1 : 0;
+    } else {
+        char *m = db_readonly_message(b->db);
+        browser_set_message(b, m);
+        free(m);
+    }
+    free(name);
+}
+
+static void confirm_delete_row(Browser *b)
+{
+    long long rowid = b->rowset.rows[b->sel_row].rowid;
+    if (db_delete_row(b->db, b->current_table, rowid) != 0) {
+        char *m = db_readonly_message(b->db);
+        browser_set_message(b, m);
+        free(m);
+    } else {
+        browser_load_table(b, b->current_table);
+        if (b->sel_row >= b->rowset.nrows)
+            b->sel_row = b->rowset.nrows > 0 ? b->rowset.nrows - 1 : 0;
+    }
+}
+
+static void confirm_null_field(Browser *b)
+{
+    free(b->edit_values[b->sel_field]);
+    b->edit_values[b->sel_field] = NULL;
+}
+
 /* --- Tables view --- */
 
 void input_handle_tables(Browser *b, int key, int height)
@@ -53,6 +96,7 @@ void input_handle_tables(Browser *b, int key, int height)
             b->sel_row = 0;
             b->row_scroll = 0;
             b->row_horiz = 0;
+            browser_load_find_history(b, "rows", b->current_table);
         }
         break;
     case 9: /* Tab */
@@ -90,8 +134,7 @@ void input_handle_tables(Browser *b, int key, int height)
                 b->prompt_mode = 1;
                 snprintf(b->prompt_text, sizeof(b->prompt_text),
                          " Drop table '%s'? (y/n) ", b->tables[b->sel_table].name);
-                /* Store action for prompt handler */
-                b->prompt_action = NULL; /* handled inline in prompt handler */
+                b->prompt_action = confirm_drop_table;
             }
         }
         break;
@@ -103,6 +146,7 @@ void input_handle_tables(Browser *b, int key, int height)
         b->find_input[0] = '\0';
         b->find_input_len = 0;
         b->find_input_pos = 0;
+        b->find_history_pos = -1;
         break;
     case ':':
         b->command_mode = 1;
@@ -171,6 +215,7 @@ void input_handle_rows(Browser *b, int key, int height)
         b->find_filter[0] = '\0';
         free(b->find_where);
         b->find_where = NULL;
+        browser_load_find_history(b, "tables", NULL);
         break;
     case 9: /* Tab */
         if (b->sel_row < count - 1) {
@@ -200,7 +245,7 @@ void input_handle_rows(Browser *b, int key, int height)
                 b->prompt_mode = 1;
                 snprintf(b->prompt_text, sizeof(b->prompt_text),
                          " Delete this row? (y/n) ");
-                b->prompt_action = NULL;
+                b->prompt_action = confirm_delete_row;
             }
         }
         break;
@@ -223,6 +268,7 @@ void input_handle_rows(Browser *b, int key, int height)
         b->find_input[0] = '\0';
         b->find_input_len = 0;
         b->find_input_pos = 0;
+        b->find_history_pos = -1;
         break;
     case ':':
         b->command_mode = 1;
@@ -261,6 +307,38 @@ static void input_do_cut(Browser *b)
     free(b->edit_values[b->sel_field]);
     b->edit_values[b->sel_field] = NULL;
     browser_set_message(b, "Cut: field cleared (value copied).");
+}
+
+/* Check for unsaved changes in edit mode. */
+static int has_unsaved_changes(Browser *b)
+{
+    if (!b->edit_values || !b->edit_original) return 0;
+    for (int i = 0; i < b->ncols; i++) {
+        const char *cur  = b->edit_values[i];
+        const char *orig = b->edit_original[i];
+        if (cur == NULL && orig != NULL) return 1;
+        if (cur != NULL && orig == NULL) return 1;
+        if (cur && orig && strcmp(cur, orig) != 0) return 1;
+    }
+    return 0;
+}
+
+/* Prompt action: discard unsaved changes and return to rows view. */
+static void confirm_discard_changes(Browser *b)
+{
+    browser_free_drillthrough(b);
+    b->current_view = VIEW_ROWS;
+    browser_load_find_history(b, "rows", b->current_table);
+    if (b->edit_values) {
+        for (int i = 0; i < b->ncols; i++) free(b->edit_values[i]);
+        free(b->edit_values);
+        b->edit_values = NULL;
+    }
+    if (b->edit_original) {
+        for (int i = 0; i < b->ncols; i++) free(b->edit_original[i]);
+        free(b->edit_original);
+        b->edit_original = NULL;
+    }
 }
 
 void input_handle_fields(Browser *b, WINDOW *w, int key, int height, int width)
@@ -337,17 +415,13 @@ void input_handle_fields(Browser *b, WINDOW *w, int key, int height, int width)
         break;
     }
     case KEY_BACKSPACE: case 127: case 'h': case KEY_LEFT:
-        browser_free_drillthrough(b);
-        b->current_view = VIEW_ROWS;
-        if (b->edit_values) {
-            for (int i = 0; i < b->ncols; i++) free(b->edit_values[i]);
-            free(b->edit_values);
-            b->edit_values = NULL;
-        }
-        if (b->edit_original) {
-            for (int i = 0; i < b->ncols; i++) free(b->edit_original[i]);
-            free(b->edit_original);
-            b->edit_original = NULL;
+        if (b->drillthrough_mode || !has_unsaved_changes(b)) {
+            confirm_discard_changes(b);
+        } else {
+            b->prompt_mode = 1;
+            snprintf(b->prompt_text, sizeof(b->prompt_text),
+                     " Discard unsaved changes? (y/n) ");
+            b->prompt_action = confirm_discard_changes;
         }
         break;
     case 'E': {
@@ -383,7 +457,7 @@ void input_handle_fields(Browser *b, WINDOW *w, int key, int height, int width)
             b->prompt_mode = 1;
             snprintf(b->prompt_text, sizeof(b->prompt_text),
                      " Set field to NULL? (y/n) ");
-            b->prompt_action = NULL;
+            b->prompt_action = confirm_null_field;
         }
         break;
     case 'o':
@@ -404,7 +478,13 @@ void input_handle_fields(Browser *b, WINDOW *w, int key, int height, int width)
             ? (b->drillthrough_vals ? b->drillthrough_vals[b->sel_field] : NULL)
             : (b->edit_values       ? b->edit_values[b->sel_field]       : NULL);
         if (clipboard_copy(val ? val : "")) {
-            browser_set_message(b, "Copied to clipboard.");
+            char msg[128];
+            const char *col_name = b->drillthrough_mode
+                ? (b->drillthrough_cols ? b->drillthrough_cols[b->sel_field] : "?")
+                : (b->current_columns    ? b->current_columns[b->sel_field]    : "?");
+            snprintf(msg, sizeof(msg), "Copied field %d (%s) to clipboard.",
+                     b->sel_field, col_name);
+            browser_set_message(b, msg);
         } else {
             char msg[64];
             snprintf(msg, sizeof(msg), "Copy failed (no %s clipboard)",
@@ -533,6 +613,21 @@ void input_handle_find(Browser *b, int key)
 {
     switch (key) {
     case '\n': case KEY_ENTER: {
+        /* Save non-empty input to history */
+        if (b->find_input_len > 0) {
+            const char *view_str;
+            const char *context_str;
+            if (b->current_view == VIEW_TABLES) {
+                view_str = "tables";
+                context_str = NULL;
+            } else {
+                view_str = "rows";
+                context_str = b->current_table;
+            }
+            db_save_find_history(b->db, view_str, context_str, b->find_input);
+        }
+        b->find_history_pos = -1;
+
         /* Apply filter */
         /* Trim and check for empty/"." to clear */
         const char *text = b->find_input;
@@ -563,15 +658,47 @@ void input_handle_find(Browser *b, int key)
     case 7:  /* ^G */
         b->find_mode = 0;
         break;
+    case KEY_UP:
+        if (b->nfind_history > 0) {
+            if (b->find_history_pos < 0)
+                b->find_history_pos = 0;
+            else if (b->find_history_pos < b->nfind_history - 1)
+                b->find_history_pos++;
+            strncpy(b->find_input, b->find_history[b->find_history_pos],
+                    sizeof(b->find_input) - 1);
+            b->find_input[sizeof(b->find_input) - 1] = '\0';
+            b->find_input_len = (int)strlen(b->find_input);
+            b->find_input_pos = b->find_input_len;
+        }
+        break;
+    case KEY_DOWN:
+        if (b->find_history_pos >= 0) {
+            if (b->find_history_pos > 0) {
+                b->find_history_pos--;
+                strncpy(b->find_input, b->find_history[b->find_history_pos],
+                        sizeof(b->find_input) - 1);
+                b->find_input[sizeof(b->find_input) - 1] = '\0';
+                b->find_input_len = (int)strlen(b->find_input);
+                b->find_input_pos = b->find_input_len;
+            } else {
+                b->find_history_pos = -1;
+                b->find_input[0] = '\0';
+                b->find_input_len = 0;
+                b->find_input_pos = 0;
+            }
+        }
+        break;
     case KEY_BACKSPACE: case 127:
         if (b->find_input_len > 0)
             b->find_input[--b->find_input_len] = '\0';
+        b->find_history_pos = -1;
         break;
     default:
         if (key >= 32 && key <= 126 && b->find_input_len < (int)sizeof(b->find_input) - 1) {
             b->find_input[b->find_input_len++] = (char)key;
             b->find_input[b->find_input_len] = '\0';
         }
+        b->find_history_pos = -1;
         break;
     }
 }

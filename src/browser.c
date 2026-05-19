@@ -11,6 +11,16 @@
 #include <time.h>
 #include <unistd.h>
 
+void browser_load_find_history(Browser *b, const char *view, const char *context)
+{
+    if (b->find_history) {
+        for (int i = 0; i < b->nfind_history; i++) free(b->find_history[i]);
+        free(b->find_history);
+    }
+    b->find_history = db_load_find_history(b->db, view, context, &b->nfind_history);
+    b->find_history_pos = -1;
+}
+
 void browser_init(Browser *b, Database *db)
 {
     memset(b, 0, sizeof(*b));
@@ -20,7 +30,9 @@ void browser_init(Browser *b, Database *db)
     b->sort_grabbed = -1;
     b->tables = db_get_tables(db, &b->ntables);
     db_ensure_config_table(db);
+    db_ensure_find_history_table(db);
     browser_load_config(b);
+    browser_load_find_history(b, "tables", NULL);
 }
 
 void browser_free_drillthrough(Browser *b)
@@ -126,6 +138,10 @@ void browser_destroy(Browser *b)
         for (int i = 0; i < b->nfind_params; i++)
             free(b->find_params[i]);
         free(b->find_params);
+    }
+    if (b->find_history) {
+        for (int i = 0; i < b->nfind_history; i++) free(b->find_history[i]);
+        free(b->find_history);
     }
     if (b->table_display_order) {
         for (int i = 0; i < b->ntable_order; i++)
