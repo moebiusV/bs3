@@ -28,7 +28,7 @@ src/%.o: src/%.c
 	$(CC) $(CFLAGS) $(NCURSES_CFLAGS) $(SQLITE_CFLAGS) -Isrc -c -o $@ $<
 
 lib/sqlite3.o: lib/sqlite3.c
-	$(CC) -O2 -DSQLITE_THREADSAFE=0 -DSQLITE_OMIT_LOAD_EXTENSION -c -o $@ $<
+	$(CC) -O2 -Wno-discarded-qualifiers -DSQLITE_THREADSAFE=0 -DSQLITE_OMIT_LOAD_EXTENSION -c -o $@ $<
 
 install: $(ALIAS)
 	install -d $(DESTDIR)$(BINDIR)
