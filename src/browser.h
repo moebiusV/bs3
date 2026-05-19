@@ -171,7 +171,7 @@ void browser_free_find_dialog(Browser *b);
 void browser_load_config(Browser *b);
 
 /* Drillthrough: open source table row from a view row */
-void browser_enter_drillthrough(Browser *b);
+bool browser_enter_drillthrough(Browser *b);
 void browser_free_drillthrough(Browser *b);
 
 #endif

@@ -55,73 +55,89 @@ void browser_free_drillthrough(Browser *b)
     b->drillthrough_ncols = 0;
 }
 
-void browser_enter_drillthrough(Browser *b)
+bool browser_enter_drillthrough(Browser *b)
 {
-    if (b->sel_row < 0 || b->sel_row >= b->rowset.nrows) return;
+    if (b->sel_row < 0 || b->sel_row >= b->rowset.nrows) return false;
 
-    /* Load config: view_drillthrough:viewname = "source_table:key_col" */
+    /* Load config: view_drillthrough:viewname = "key_col:label:SQL ..." */
     Buf cfgkey;
     buf_init(&cfgkey);
     buf_printf(&cfgkey, "view_drillthrough:%s", b->current_table);
     char *config = db_load_config(b->db, cfgkey.data);
     buf_free(&cfgkey);
 
-    if (!config) {
-        browser_set_message(b, "No drillthrough configured (set view_drillthrough:<view> in _browse_config).");
-        return;
-    }
+    if (config) {
+        /* Config format: "key_col_in_view:display_label:SELECT ... WHERE ... = ?"
+         * Split on first two colons; SQL may freely contain colons after that. */
+        char *colon1 = strchr(config, ':');
+        char *colon2 = colon1 ? strchr(colon1 + 1, ':') : NULL;
+        if (!colon1 || !colon2) {
+            free(config);
+            browser_set_message(b, "Bad drillthrough config (expected key_col:label:SQL).");
+            return false;
+        }
+        *colon1 = '\0';
+        *colon2 = '\0';
+        const char *key_col = config;
+        const char *label   = colon1 + 1;
+        const char *sql     = colon2 + 1;
 
-    /* Config format: "key_col_in_view:display_label:SELECT ... WHERE ... = ?"
-     * Split on first two colons; SQL may freely contain colons after that. */
-    char *colon1 = strchr(config, ':');
-    char *colon2 = colon1 ? strchr(colon1 + 1, ':') : NULL;
-    if (!colon1 || !colon2) {
+        /* Find key_col in the view's columns */
+        int key_idx = -1;
+        for (int i = 0; i < b->ncols; i++) {
+            if (strcmp(b->current_columns[i], key_col) == 0) { key_idx = i; break; }
+        }
+        if (key_idx < 0) {
+            free(config);
+            browser_set_message(b, "Drillthrough key column not found in view.");
+            return false;
+        }
+
+        const char *key_val = b->rowset.rows[b->sel_row].values[key_idx];
+        if (!key_val) {
+            free(config);
+            browser_set_message(b, "Drillthrough key is NULL for this row.");
+            return false;
+        }
+
+        char **cols = NULL, **vals = NULL;
+        int ncols = 0;
+        if (!db_fetch_row_by_sql(b->db, sql, key_val, &cols, &ncols, &vals)) {
+            free(config);
+            browser_set_message(b, "No matching row found in source table.");
+            return false;
+        }
+
+        browser_free_drillthrough(b);
+        b->drillthrough_mode   = 1;
+        b->drillthrough_table  = xstrdup(label);
         free(config);
-        browser_set_message(b, "Bad drillthrough config (expected key_col:label:SQL).");
-        return;
-    }
-    *colon1 = '\0';
-    *colon2 = '\0';
-    const char *key_col = config;
-    const char *label   = colon1 + 1;
-    const char *sql     = colon2 + 1;
-
-    /* Find key_col in the view's columns */
-    int key_idx = -1;
-    for (int i = 0; i < b->ncols; i++) {
-        if (strcmp(b->current_columns[i], key_col) == 0) { key_idx = i; break; }
-    }
-    if (key_idx < 0) {
-        free(config);
-        browser_set_message(b, "Drillthrough key column not found in view.");
-        return;
+        b->drillthrough_cols   = cols;
+        b->drillthrough_vals   = vals;
+        b->drillthrough_ncols  = ncols;
+        b->sel_field           = 0;
+        b->field_scroll        = 0;
+        b->current_view        = VIEW_FIELDS;
+        return true;
     }
 
-    const char *key_val = b->rowset.rows[b->sel_row].values[key_idx];
-    if (!key_val) {
-        free(config);
-        browser_set_message(b, "Drillthrough key is NULL for this row.");
-        return;
-    }
-
-    char **cols = NULL, **vals = NULL;
-    int ncols = 0;
-    if (!db_fetch_row_by_sql(b->db, sql, key_val, &cols, &ncols, &vals)) {
-        free(config);
-        browser_set_message(b, "No matching row found in source table.");
-        return;
-    }
-
+    /* No explicit config: default to read-only view of the current row.
+     * The view's own columns and values become a non-editable field view. */
+    Row *r = &b->rowset.rows[b->sel_row];
     browser_free_drillthrough(b);
-    b->drillthrough_mode   = 1;
-    b->drillthrough_table  = xstrdup(label);
-    free(config);
-    b->drillthrough_cols   = cols;
-    b->drillthrough_vals   = vals;
-    b->drillthrough_ncols  = ncols;
-    b->sel_field           = 0;
-    b->field_scroll        = 0;
-    b->current_view        = VIEW_FIELDS;
+    b->drillthrough_mode  = 1;
+    b->drillthrough_table = xstrdup(b->current_table);
+    b->drillthrough_ncols = b->ncols;
+    b->drillthrough_cols  = xcalloc((size_t)b->ncols, sizeof(char *));
+    b->drillthrough_vals  = xcalloc((size_t)b->ncols, sizeof(char *));
+    for (int i = 0; i < b->ncols; i++) {
+        b->drillthrough_cols[i] = xstrdup(b->current_columns[i]);
+        b->drillthrough_vals[i] = r->values[i] ? xstrdup(r->values[i]) : NULL;
+    }
+    b->sel_field    = 0;
+    b->field_scroll = 0;
+    b->current_view = VIEW_FIELDS;
+    return true;
 }
 
 void browser_destroy(Browser *b)
