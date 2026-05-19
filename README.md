@@ -19,18 +19,32 @@ and edit fields interactively -- no SQL required, no GUI needed.
 - **Vi-style navigation** -- hjkl, JK for paging, Tab to advance
 - **Readline-style inline editor** -- ^A/^E/^B/^F/^W/^K/^U/^T/^D/^G
 - **Turbo Pascal IDE colors** -- exact CGA palette values (blue
-  backgrounds, yellow text, cyan title bars) on terminals that support
-  `curses.can_change_color()`
+  backgrounds, yellow text, cyan title bars) with a 3-tier fallback
+  strategy: `init_color` on capable terminals, extended-color RGB in
+  xterm-direct/tmux with `default-terminal=xterm-direct`, and closest
+  cube-index matches in standard 256-color terminals.
 - **Multi-column sort** -- press `o` in the row browser to sort by one
   or more columns with ASC/DESC toggles; sort order is persisted
   per-table
 - **Structured search** -- press `/` for free-text search across all
-  columns, or `f` for a per-column find dialog with AND/OR toggles
+  columns, or `f` for a per-column find dialog with AND/OR toggles.
+  Search history (Up/Down) is persisted across restarts in a
+  `_find_history` table.
+- **SQLite REGEXP support** -- POSIX regex expressions available in
+  find patterns and custom queries via a built-in `regexp()` callback.
+- **Clipboard** -- `^C` to copy, `^V` to paste, `^X` to cut in the
+  field editor, with auto-detected WSL/macOS/Wayland/X11 backends.
+- **View drillthrough** -- press Enter on a VIEW row to open the
+  underlying source table row, configured per-view via
+  `_browse_config`.
 - **Custom display order** -- rearrange tables, columns, and sort
   priority with a grab-and-move overlay; ordering is persisted in a
   `_browse_config` table
 - **Safety mode** -- destructive actions (drop table, delete row, set
   NULL) require confirmation by default; `:unsafe` disables it
+- **Unsaved changes guard** -- leaving the field editor with modified
+  values prompts "Discard unsaved changes?" to prevent accidental data
+  loss.
 - **External editor/pager** -- press `E` to edit a field in `$EDITOR`,
   `v`/Enter to view in `$PAGER`
 - **East Asian wide-character support** -- correct display-width
@@ -96,6 +110,9 @@ bs3 mydb.sqlite3                      # same thing, shorter name
 | `v`/Enter | View field in $PAGER |
 | `d`/Del | Delete (respects safety mode) |
 | `s` | Save changes (field editor) |
+| `^C` | Copy field value to clipboard (field editor) |
+| `^V` | Paste clipboard into field (field editor) |
+| `^X` | Cut field (copy + set NULL, field editor) |
 | `:safe` | Enable safety mode |
 | `:unsafe` | Disable safety mode |
 | `F1` | Context-sensitive help |

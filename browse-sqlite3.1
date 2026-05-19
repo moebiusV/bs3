@@ -29,6 +29,10 @@ Unicode box-drawing characters with ASCII fallback
 Turbo Pascal IDE colors via exact CGA RGB values when the terminal supports
 .BR curses.can_change_color ()
 .IP \(bu 2
+POSIX REGEXP support in find patterns and SQL queries via a built-in
+.B regexp()
+callback
+.IP \(bu 2
 Safety mode requiring confirmation before destructive actions
 .IP \(bu 2
 External editor and pager integration via
@@ -107,7 +111,10 @@ Page up
 Next row
 .TP
 .BR l " / " Right " / " Enter
-Edit selected row in the field editor
+Edit selected row in the field editor.
+On a VIEW row, opens a drillthrough to the underlying source table row
+(configured per-view via
+.BR _browse_config ).
 .TP
 .BR h " / " Left
 Go back to table list
@@ -319,6 +326,8 @@ Press
 to close the overlay.
 .SH FIND
 Press
+.B /
+or
 .B f
 in any view to open the find bar at the bottom of the screen.
 Type a search pattern and press
@@ -379,7 +388,10 @@ to narrow results.
 Plain substring match against column names and field values;
 matching fields are highlighted.
 .SS History
-The find bar maintains a per-session history of search strings.
+The find bar maintains a search history scoped by view and context
+(table name or row ID). Past searches are stored in the
+.B _find_history
+table inside the database, so they persist across sessions.
 Press
 .B Up
 or
@@ -441,9 +453,24 @@ White    #FFFFFF
 .fi
 .RE
 .PP
-On terminals that do not support color redefinition, the standard
-curses color constants are used as a fallback; the actual appearance
-will depend on the terminal's theme.
+On terminals that do not support color redefinition, a two-tier
+fallback is applied:
+.RS
+.IP 1.
+If the terminal advertises direct-colour capability
+.RB ( COLORS
+\[>=] 16777216, e.g. xterm-direct or tmux with
+.BR default-terminal=xterm-direct ),
+colours are set via
+.BR init_extended_pair ()
+using exact CGA RGB values.
+.IP 2.
+Otherwise, the closest 216-colour cube indices are used from the
+terminal's fixed palette.
+.RE
+.PP
+The 3-tier strategy ensures correct CGA colours across bare terminals,
+tmux, screen, and direct-colour emulators.
 .SH UNICODE
 Box-drawing characters (\(lq\[u250C]\[u2500]\[u2510]\[u2502]\[u2514]\[u2518]\(rq) are used
 for the help overlay when the locale encoding supports them;
