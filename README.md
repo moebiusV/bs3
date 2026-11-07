@@ -1,5 +1,7 @@
 # browse-sqlite3
 
+[github.com/moebiusV/bs3](https://github.com/moebiusV/bs3) | `git clone https://github.com/moebiusV/bs3`
+
 Interactive terminal browser for SQLite databases with vi-style navigation and CGA colors (TUI).
 
 Also available as `bs3`.
