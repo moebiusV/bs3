@@ -1,6 +1,6 @@
 # browse-sqlite3
 
-[project index](https://moebiusv.github.io/) | [github.com/moebiusV/bs3](https://github.com/moebiusV/bs3) | `git clone https://github.com/moebiusV/bs3`
+[Index: All Projects](https://moebiusv.github.io/) | [github.com/moebiusV/bs3](https://github.com/moebiusV/bs3) | `git clone https://github.com/moebiusV/bs3`
 
 Interactive terminal browser for SQLite databases with vi-style navigation and CGA colors (TUI).
 
